@@ -1,0 +1,83 @@
+require('dotenv').config();
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+const morgan = require('morgan');
+const path = require('path');
+const swaggerUi = require('swagger-ui-express');
+
+const connectDB = require('./config/db');
+const errorHandler = require('./middleware/errorHandler');
+const swaggerSpec = require('./docs/swagger');
+const setupSocket = require('./socket');
+
+// Route imports
+const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
+const patientRoutes = require('./routes/patientRoutes');
+const appointmentRoutes = require('./routes/appointmentRoutes');
+const medicineRoutes = require('./routes/medicineRoutes');
+const fileRoutes = require('./routes/fileRoutes');
+const reportRoutes = require('./routes/reportRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+
+const app = express();
+const server = http.createServer(app);
+
+// Socket.io setup
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST']
+  }
+});
+
+setupSocket(io);
+app.set('io', io);
+
+// Connect to MongoDB
+connectDB();
+
+// Middleware
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
+
+// Static files (uploads)
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/patients', patientRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/medicines', medicineRoutes);
+app.use('/api/files', fileRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/chats', chatRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/notifications', notificationRoutes);
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, message: 'Vaidya Assist API is running', timestamp: new Date() });
+});
+
+// Error handler
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`\n🏥 Vaidya Assist Server running on port ${PORT}`);
+  console.log(`📚 API Docs: http://localhost:${PORT}/api-docs`);
+  console.log(`🔗 API: http://localhost:${PORT}/api`);
+});
+
+module.exports = { app, server, io };
