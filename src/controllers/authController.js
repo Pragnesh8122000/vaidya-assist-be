@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Role = require('../models/Role');
+const Patient = require('../models/Patient');
 const jwt = require('jsonwebtoken');
 const { generateToken, generateRefreshToken } = require('../utils/token');
 
@@ -19,6 +20,65 @@ exports.register = async (req, res, next) => {
     }
 
     const user = await User.create({ name, email, password, phone, role: doctorRole._id });
+    const token = generateToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
+
+    user.refreshToken = refreshToken;
+    user.lastLogin = new Date();
+    await user.save();
+
+    const populatedUser = await User.findById(user._id).populate({ path: 'role', populate: { path: 'permissions' } });
+
+    res.status(201).json({
+      success: true,
+      data: { user: populatedUser, token, refreshToken }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Register Patient
+exports.registerPatient = async (req, res, next) => {
+  try {
+    const { name, email, password, phone, age, gender, address, bloodGroup } = req.body;
+
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Email already registered.' });
+    }
+
+    const patientRole = await Role.findOne({ slug: 'patient' });
+    if (!patientRole) {
+      return res.status(500).json({ success: false, message: 'Patient role not seeded.' });
+    }
+
+    // Create User
+    const user = await User.create({
+      name,
+      email,
+      password,
+      phone,
+      role: patientRole._id
+    });
+
+    // Create Patient record
+    const patient = await Patient.create({
+      name,
+      email,
+      phone,
+      age,
+      gender,
+      address,
+      bloodGroup,
+      user: user._id,
+      createdBy: user._id // Patient is technically created by themselves here
+    });
+
+    // Link Patient back to User
+    user.patientProfile = patient._id;
+    await user.save();
+
     const token = generateToken(user._id);
     const refreshToken = generateRefreshToken(user._id);
 

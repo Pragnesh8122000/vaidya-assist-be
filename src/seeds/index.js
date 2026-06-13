@@ -25,7 +25,11 @@ const permissions = [
   { name: 'Manage Assistants', slug: 'manage_assistants', module: 'users', description: 'Create and manage assistants' },
   { name: 'Manage Roles', slug: 'manage_roles', module: 'roles', description: 'Create and manage roles and permissions' },
   { name: 'View Dashboard', slug: 'view_dashboard', module: 'dashboard', description: 'View dashboard analytics' },
-  { name: 'Manage Chat', slug: 'manage_chat', module: 'chat', description: 'Use internal chat system' }
+  { name: 'Manage Chat', slug: 'manage_chat', module: 'chat', description: 'Use internal chat system' },
+  { name: 'View Own Profile', slug: 'view_own_profile', module: 'patients', description: 'View own clinical profile' },
+  { name: 'Update Own Profile', slug: 'update_own_profile', module: 'patients', description: 'Update own contact details' },
+  { name: 'Book Appointment', slug: 'book_appointment', module: 'appointments', description: 'Book a new appointment' },
+  { name: 'View Own Appointments', slug: 'view_own_appointments', module: 'appointments', description: 'View own appointment history' }
 ];
 
 const roleDefinitions = [
@@ -52,6 +56,12 @@ const roleDefinitions = [
     slug: 'pharmacist',
     description: 'Manages medicine inventory',
     permissionSlugs: ['manage_medicines', 'view_medicines', 'view_patients', 'view_dashboard', 'manage_chat']
+  },
+  {
+    name: 'Patient',
+    slug: 'patient',
+    description: 'End-user patient',
+    permissionSlugs: ['view_own_profile', 'update_own_profile', 'book_appointment', 'view_own_appointments']
   }
 ];
 

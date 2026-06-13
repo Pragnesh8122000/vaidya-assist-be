@@ -15,7 +15,8 @@ const patientSchema = new mongoose.Schema({
   address: { type: String },
   bloodGroup: { type: String },
   medicalNotes: [medicalNoteSchema],
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
 patientSchema.index({ name: 'text', phone: 'text', email: 'text' });

@@ -11,7 +11,8 @@ const userSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   refreshToken: { type: String, select: false },
-  lastLogin: { type: Date }
+  lastLogin: { type: Date },
+  patientProfile: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient' }
 }, { timestamps: true });
 
 userSchema.index({ role: 1 });
