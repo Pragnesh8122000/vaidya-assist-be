@@ -28,24 +28,36 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const app = express();
 const server = http.createServer(app);
 
-// Socket.io setup
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'https://vaidya-assist-be.onrender.com',
+  'https://vaidya-assist-fe.vercel.app',
+];
+
 const io = new Server(server, {
   cors: {
-  cors: {
-    origin: process.env.CLIENT_URL || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', "https://vaidya-assist-be.onrender.com", "https://vaidya-assist-fe.vercel.app"],
-    methods: ['GET', 'POST', "PUT", "DELETE", "OPTIONS"]
-  }
+    origin: process.env.CLIENT_URL || ALLOWED_ORIGINS,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
   }
 });
 
-setupSocket(io);
-app.set('io', io);
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || process.env.CLIENT_URL === origin) {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
-// Connect to MongoDB
-connectDB();
-
-// Middleware
-app.use(cors({ origin: process.env.CLIENT_URL || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'], credentials: true }));
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
