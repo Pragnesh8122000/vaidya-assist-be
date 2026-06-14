@@ -32,7 +32,7 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
   cors: {
-    origin: process.env.CLIENT_URL || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+    origin: process.env.CLIENT_URL || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', "https://vaidya-assist-be.onrender.com", "https://vaidya-assist-fe.vercel.app"],
     methods: ['GET', 'POST']
   }
   }
