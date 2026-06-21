@@ -20,7 +20,8 @@ exports.register = async (req, res, next) => {
     }
 
     const user = await User.create({ name, email, password, phone, role: doctorRole._id });
-    const token = generateToken(user._id);
+    await user.ensureIdFields();
+    const token = generateToken(user);
     const refreshToken = generateRefreshToken(user._id);
 
     user.refreshToken = refreshToken;
@@ -79,7 +80,8 @@ exports.registerPatient = async (req, res, next) => {
     user.patientProfile = patient._id;
     await user.save();
 
-    const token = generateToken(user._id);
+    await user.ensureIdFields();
+    const token = generateToken(user);
     const refreshToken = generateRefreshToken(user._id);
 
     user.refreshToken = refreshToken;
@@ -116,7 +118,8 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
-    const token = generateToken(user._id);
+    await user.ensureIdFields();
+    const token = generateToken(user);
     const refreshToken = generateRefreshToken(user._id);
 
     user.refreshToken = refreshToken;
@@ -147,7 +150,8 @@ exports.refreshToken = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid refresh token.' });
     }
 
-    const newToken = generateToken(user._id);
+    await user.ensureIdFields();
+    const newToken = generateToken(user);
     const newRefreshToken = generateRefreshToken(user._id);
 
     user.refreshToken = newRefreshToken;

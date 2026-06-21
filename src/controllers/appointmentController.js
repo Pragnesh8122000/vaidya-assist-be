@@ -36,6 +36,50 @@ exports.getAppointments = async (req, res, next) => {
   }
 };
 
+// Get today's appointments for the authenticated doctor
+exports.getTodayAppointments = async (req, res, next) => {
+  try {
+    const today = new Date();
+    const start = new Date(today.setHours(0, 0, 0, 0));
+    const end = new Date(today.setHours(23, 59, 59, 999));
+
+    const appointments = await Appointment.find({
+      doctor: req.user._id,
+      date: { $gte: start, $lte: end },
+    })
+      .populate('patient', 'name phone age gender')
+      .populate('doctor', 'name email')
+      .populate('createdBy', 'name')
+      .sort({ date: 1, time: 1 });
+
+    res.json({ success: true, data: appointments });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get upcoming appointments for the authenticated doctor
+exports.getUpcomingAppointments = async (req, res, next) => {
+  try {
+    const { limit = 10 } = req.query;
+    const now = new Date();
+
+    const appointments = await Appointment.find({
+      doctor: req.user._id,
+      date: { $gte: now },
+    })
+      .populate('patient', 'name phone age gender')
+      .populate('doctor', 'name email')
+      .populate('createdBy', 'name')
+      .sort({ date: 1, time: 1 })
+      .limit(parseInt(limit, 10));
+
+    res.json({ success: true, data: appointments });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Get calendar appointments (no pagination)
 exports.getCalendarAppointments = async (req, res, next) => {
   try {
@@ -76,7 +120,9 @@ exports.getAppointment = async (req, res, next) => {
 // Create appointment
 exports.createAppointment = async (req, res, next) => {
   try {
-    const appointment = await Appointment.create({ ...req.body, createdBy: req.user._id });
+    // The agent-service sends a UUID doctorId, but Mongo expects the
+    // authenticated user's ObjectId. Force the doctor to the current user.
+    const appointment = await Appointment.create({ ...req.body, doctor: req.user._id, createdBy: req.user._id });
     const populated = await Appointment.findById(appointment._id)
       .populate('patient', 'name phone')
       .populate('doctor', 'name');

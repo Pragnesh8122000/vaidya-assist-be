@@ -18,6 +18,10 @@ const auth = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid token or user inactive.' });
     }
 
+    // Stable scoping IDs used by agent-service and other internal services.
+    // These come from the token payload, which is set at login/refresh.
+    req.doctorId = decoded.doctorId || user.doctorId;
+    req.clinicId = decoded.clinicId || user.clinicId;
     req.user = user;
     next();
   } catch (error) {
