@@ -33,11 +33,11 @@ describe('appointmentController agent endpoints', () => {
     jest.clearAllMocks();
   });
 
-  it('getTodayAppointments queries today by doctor', async () => {
+  it('getTodayAppointments queries today by doctor and clinic', async () => {
     const result = [{ _id: 'a1', time: '10:00' }];
     Appointment.find.mockReturnValue(createTodayQuery(result));
 
-    const req = { user: { _id: 'doc-object-id' } };
+    const req = { user: { _id: 'doc-object-id' }, clinicId: 'clinic-uuid' };
     const res = createRes();
     const next = jest.fn();
 
@@ -47,6 +47,7 @@ describe('appointmentController agent endpoints', () => {
       expect.objectContaining({
         doctor: 'doc-object-id',
         date: expect.any(Object),
+        clinicId: 'clinic-uuid',
       }),
     );
     expect(res.json).toHaveBeenCalledWith({ success: true, data: result });
@@ -57,7 +58,7 @@ describe('appointmentController agent endpoints', () => {
     const result = [{ _id: 'a2', time: '11:00' }];
     Appointment.find.mockReturnValue(createUpcomingQuery(result));
 
-    const req = { user: { _id: 'doc-object-id' }, query: {} };
+    const req = { user: { _id: 'doc-object-id' }, clinicId: 'clinic-uuid', query: {} };
     const res = createRes();
     const next = jest.fn();
 
@@ -67,6 +68,7 @@ describe('appointmentController agent endpoints', () => {
       expect.objectContaining({
         doctor: 'doc-object-id',
         date: expect.any(Object),
+        clinicId: 'clinic-uuid',
       }),
     );
     expect(res.json).toHaveBeenCalledWith({ success: true, data: result });
@@ -76,7 +78,7 @@ describe('appointmentController agent endpoints', () => {
     const result = [];
     Appointment.find.mockReturnValue(createUpcomingQuery(result));
 
-    const req = { user: { _id: 'doc-object-id' }, query: { limit: '5' } };
+    const req = { user: { _id: 'doc-object-id' }, clinicId: 'clinic-uuid', query: { limit: '5' } };
     const res = createRes();
     const next = jest.fn();
 

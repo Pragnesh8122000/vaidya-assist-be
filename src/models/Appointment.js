@@ -13,11 +13,14 @@ const appointmentSchema = new mongoose.Schema({
   },
   notes: { type: String },
   reason: { type: String },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
+  clinicId: { type: String, index: true }
 }, { timestamps: true });
 
 appointmentSchema.index({ date: 1, doctor: 1 });
 appointmentSchema.index({ patient: 1 });
 appointmentSchema.index({ status: 1 });
+appointmentSchema.index({ clinicId: 1, date: 1 });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

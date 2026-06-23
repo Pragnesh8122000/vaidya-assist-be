@@ -2,6 +2,12 @@ const Appointment = require('../models/Appointment');
 const Patient = require('../models/Patient');
 const Medicine = require('../models/Medicine');
 
+// Base scoping filter for the authenticated clinic. New documents store
+// clinicId explicitly; legacy data should be backfilled via migration.
+function clinicScope(req) {
+  return req.clinicId ? { clinicId: req.clinicId } : {};
+}
+
 // Get dashboard statistics
 exports.getDashboardStats = async (req, res, next) => {
   try {
@@ -10,12 +16,14 @@ exports.getDashboardStats = async (req, res, next) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    const scope = clinicScope(req);
+
     const [totalPatients, todayAppointments, pendingAppointments, totalMedicines, lowStockMedicines] = await Promise.all([
-      Patient.countDocuments(),
-      Appointment.countDocuments({ date: { $gte: today, $lt: tomorrow } }),
-      Appointment.countDocuments({ status: { $in: ['Waiting', 'In Consultation'] } }),
-      Medicine.countDocuments(),
-      Medicine.countDocuments({ $expr: { $lte: ['$stock', '$lowStockThreshold'] } })
+      Patient.countDocuments(scope),
+      Appointment.countDocuments({ ...scope, date: { $gte: today, $lt: tomorrow } }),
+      Appointment.countDocuments({ ...scope, status: { $in: ['Waiting', 'In Consultation'] } }),
+      Medicine.countDocuments(scope),
+      Medicine.countDocuments({ ...scope, $expr: { $lte: ['$stock', '$lowStockThreshold'] } })
     ]);
 
     res.json({
@@ -36,7 +44,7 @@ exports.getAppointmentChart = async (req, res, next) => {
     startDate.setHours(0, 0, 0, 0);
 
     const data = await Appointment.aggregate([
-      { $match: { date: { $gte: startDate } } },
+      { $match: { ...clinicScope(req), date: { $gte: startDate } } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
@@ -62,7 +70,7 @@ exports.getPatientVisitStats = async (req, res, next) => {
     startDate.setMonth(startDate.getMonth() - months);
 
     const data = await Appointment.aggregate([
-      { $match: { date: { $gte: startDate }, status: 'Completed' } },
+      { $match: { ...clinicScope(req), date: { $gte: startDate }, status: 'Completed' } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m', date: '$date' } },
@@ -90,6 +98,7 @@ exports.getPatientVisitStats = async (req, res, next) => {
 exports.getMedicineStockChart = async (req, res, next) => {
   try {
     const data = await Medicine.aggregate([
+      { $match: clinicScope(req) },
       {
         $group: {
           _id: '$category',
@@ -111,6 +120,7 @@ exports.getMedicineStockChart = async (req, res, next) => {
 exports.getAppointmentStatusDist = async (req, res, next) => {
   try {
     const data = await Appointment.aggregate([
+      { $match: clinicScope(req) },
       {
         $group: {
           _id: '$status',

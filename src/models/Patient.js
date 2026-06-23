@@ -16,10 +16,13 @@ const patientSchema = new mongoose.Schema({
   bloodGroup: { type: String },
   medicalNotes: [medicalNoteSchema],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
+  clinicId: { type: String, index: true }
 }, { timestamps: true });
 
 patientSchema.index({ name: 'text', phone: 'text', email: 'text' });
 patientSchema.index({ createdBy: 1 });
+patientSchema.index({ clinicId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Patient', patientSchema);

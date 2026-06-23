@@ -16,6 +16,11 @@ exports.getPatients = async (req, res, next) => {
     if (gender) query.gender = gender;
     if (bloodGroup) query.bloodGroup = bloodGroup;
 
+    // Multi-clinic scoping: restrict to the authenticated user's clinic.
+    if (req.clinicId) {
+      query.clinicId = req.clinicId;
+    }
+
     const total = await Patient.countDocuments(query);
     const patients = await Patient.find(query)
       .populate('createdBy', 'name')
@@ -51,7 +56,7 @@ exports.getPatient = async (req, res, next) => {
 // Create patient
 exports.createPatient = async (req, res, next) => {
   try {
-    const patient = await Patient.create({ ...req.body, createdBy: req.user._id });
+    const patient = await Patient.create({ ...req.body, createdBy: req.user._id, clinicId: req.user.clinicId || req.clinicId });
     res.status(201).json({ success: true, data: patient });
   } catch (error) {
     next(error);
@@ -61,7 +66,9 @@ exports.createPatient = async (req, res, next) => {
 // Update patient
 exports.updatePatient = async (req, res, next) => {
   try {
-    const patient = await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    // Preserve clinic ownership on updates; ignore any clinicId supplied in body.
+    const { clinicId: _ignored, ...safeBody } = req.body;
+    const patient = await Patient.findByIdAndUpdate(req.params.id, safeBody, { new: true, runValidators: true });
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }

@@ -20,6 +20,11 @@ exports.getMedicines = async (req, res, next) => {
       query.expiryDate = { $lte: new Date() };
     }
 
+    // Multi-clinic scoping: restrict to the authenticated user's clinic.
+    if (req.clinicId) {
+      query.clinicId = req.clinicId;
+    }
+
     const total = await Medicine.countDocuments(query);
     const medicines = await Medicine.find(query)
       .sort('-createdAt')
@@ -52,7 +57,7 @@ exports.getMedicine = async (req, res, next) => {
 // Create medicine
 exports.createMedicine = async (req, res, next) => {
   try {
-    const medicine = await Medicine.create({ ...req.body, createdBy: req.user._id });
+    const medicine = await Medicine.create({ ...req.body, createdBy: req.user._id, clinicId: req.user.clinicId || req.clinicId });
     res.status(201).json({ success: true, data: medicine });
   } catch (error) {
     next(error);
@@ -62,7 +67,9 @@ exports.createMedicine = async (req, res, next) => {
 // Update medicine
 exports.updateMedicine = async (req, res, next) => {
   try {
-    const medicine = await Medicine.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    // Preserve clinic ownership on updates; ignore any clinicId supplied in body.
+    const { clinicId: _ignored, ...safeBody } = req.body;
+    const medicine = await Medicine.findByIdAndUpdate(req.params.id, safeBody, { new: true, runValidators: true });
     if (!medicine) {
       return res.status(404).json({ success: false, message: 'Medicine not found.' });
     }
@@ -89,7 +96,8 @@ exports.deleteMedicine = async (req, res, next) => {
 exports.getLowStock = async (req, res, next) => {
   try {
     const medicines = await Medicine.find({
-      $expr: { $lte: ['$stock', '$lowStockThreshold'] }
+      $expr: { $lte: ['$stock', '$lowStockThreshold'] },
+      ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     }).sort('stock');
     res.json({ success: true, data: medicines });
   } catch (error) {
@@ -104,7 +112,8 @@ exports.getExpiringSoon = async (req, res, next) => {
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
 
     const medicines = await Medicine.find({
-      expiryDate: { $lte: thirtyDaysFromNow, $gte: new Date() }
+      expiryDate: { $lte: thirtyDaysFromNow, $gte: new Date() },
+      ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     }).sort('expiryDate');
     res.json({ success: true, data: medicines });
   } catch (error) {

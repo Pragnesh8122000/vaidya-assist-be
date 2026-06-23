@@ -17,6 +17,11 @@ exports.getAppointments = async (req, res, next) => {
     if (doctor) query.doctor = doctor;
     if (patient) query.patient = patient;
 
+    // Multi-clinic scoping: restrict to the authenticated user's clinic.
+    if (req.clinicId) {
+      query.clinicId = req.clinicId;
+    }
+
     const total = await Appointment.countDocuments(query);
     const appointments = await Appointment.find(query)
       .populate('patient', 'name phone age gender')
@@ -46,6 +51,7 @@ exports.getTodayAppointments = async (req, res, next) => {
     const appointments = await Appointment.find({
       doctor: req.user._id,
       date: { $gte: start, $lte: end },
+      ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     })
       .populate('patient', 'name phone age gender')
       .populate('doctor', 'name email')
@@ -67,6 +73,7 @@ exports.getUpcomingAppointments = async (req, res, next) => {
     const appointments = await Appointment.find({
       doctor: req.user._id,
       date: { $gte: now },
+      ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     })
       .populate('patient', 'name phone age gender')
       .populate('doctor', 'name email')
@@ -88,6 +95,11 @@ exports.getCalendarAppointments = async (req, res, next) => {
 
     if (startDate && endDate) {
       query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    }
+
+    // Multi-clinic scoping: restrict to the authenticated user's clinic.
+    if (req.clinicId) {
+      query.clinicId = req.clinicId;
     }
 
     const appointments = await Appointment.find(query)
@@ -122,7 +134,12 @@ exports.createAppointment = async (req, res, next) => {
   try {
     // The agent-service sends a UUID doctorId, but Mongo expects the
     // authenticated user's ObjectId. Force the doctor to the current user.
-    const appointment = await Appointment.create({ ...req.body, doctor: req.user._id, createdBy: req.user._id });
+    const appointment = await Appointment.create({
+      ...req.body,
+      doctor: req.user._id,
+      createdBy: req.user._id,
+      clinicId: req.user.clinicId || req.clinicId,
+    });
     const populated = await Appointment.findById(appointment._id)
       .populate('patient', 'name phone')
       .populate('doctor', 'name');

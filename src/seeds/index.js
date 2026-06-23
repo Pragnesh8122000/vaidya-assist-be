@@ -115,6 +115,10 @@ const seed = async () => {
       role: doctorRole._id
     });
 
+    // Ensure stable doctorId/clinicId UUIDs are materialized for the seeded owner.
+    await doctor.ensureIdFields();
+    const clinicId = doctor.clinicId;
+
     const assistant = await User.create({
       name: 'Priya Patel',
       email: 'assistant@vaidya.com',
@@ -146,46 +150,46 @@ const seed = async () => {
 
     // Create patients
     const patients = await Patient.insertMany([
-      { name: 'Amit Verma', age: 35, gender: 'Male', phone: '+91-9001234567', email: 'amit@email.com', address: 'Mumbai, Maharashtra', bloodGroup: 'O+', medicalNotes: [{ note: 'Type 2 Diabetes - on Metformin', createdBy: doctor._id }], createdBy: doctor._id },
-      { name: 'Sunita Devi', age: 42, gender: 'Female', phone: '+91-9001234568', email: 'sunita@email.com', address: 'Delhi', bloodGroup: 'A+', medicalNotes: [{ note: 'Hypertension - regular follow-up', createdBy: doctor._id }], createdBy: doctor._id },
-      { name: 'Rahul Singh', age: 28, gender: 'Male', phone: '+91-9001234569', email: 'rahul@email.com', address: 'Pune, Maharashtra', bloodGroup: 'B+', createdBy: doctor._id },
-      { name: 'Meena Kumari', age: 55, gender: 'Female', phone: '+91-9001234570', email: 'meena@email.com', address: 'Jaipur, Rajasthan', bloodGroup: 'AB+', medicalNotes: [{ note: 'Arthritis - joint pain management', createdBy: doctor._id }], createdBy: doctor._id },
-      { name: 'Vikram Patel', age: 45, gender: 'Male', phone: '+91-9001234571', email: 'vikram@email.com', address: 'Ahmedabad, Gujarat', bloodGroup: 'O-', createdBy: doctor._id },
-      { name: 'Kavita Sharma', age: 32, gender: 'Female', phone: '+91-9001234572', email: 'kavita@email.com', address: 'Bangalore, Karnataka', bloodGroup: 'A-', createdBy: doctor._id },
-      { name: 'Deepak Joshi', age: 60, gender: 'Male', phone: '+91-9001234573', email: 'deepak@email.com', address: 'Lucknow, UP', bloodGroup: 'B-', medicalNotes: [{ note: 'COPD - uses inhaler', createdBy: doctor._id }], createdBy: doctor._id },
-      { name: 'Anjali Nair', age: 25, gender: 'Female', phone: '+91-9001234574', email: 'anjali@email.com', address: 'Chennai, Tamil Nadu', bloodGroup: 'O+', createdBy: doctor._id }
+      { name: 'Amit Verma', age: 35, gender: 'Male', phone: '+91-9001234567', email: 'amit@email.com', address: 'Mumbai, Maharashtra', bloodGroup: 'O+', medicalNotes: [{ note: 'Type 2 Diabetes - on Metformin', createdBy: doctor._id }], createdBy: doctor._id, clinicId },
+      { name: 'Sunita Devi', age: 42, gender: 'Female', phone: '+91-9001234568', email: 'sunita@email.com', address: 'Delhi', bloodGroup: 'A+', medicalNotes: [{ note: 'Hypertension - regular follow-up', createdBy: doctor._id }], createdBy: doctor._id, clinicId },
+      { name: 'Rahul Singh', age: 28, gender: 'Male', phone: '+91-9001234569', email: 'rahul@email.com', address: 'Pune, Maharashtra', bloodGroup: 'B+', createdBy: doctor._id, clinicId },
+      { name: 'Meena Kumari', age: 55, gender: 'Female', phone: '+91-9001234570', email: 'meena@email.com', address: 'Jaipur, Rajasthan', bloodGroup: 'AB+', medicalNotes: [{ note: 'Arthritis - joint pain management', createdBy: doctor._id }], createdBy: doctor._id, clinicId },
+      { name: 'Vikram Patel', age: 45, gender: 'Male', phone: '+91-9001234571', email: 'vikram@email.com', address: 'Ahmedabad, Gujarat', bloodGroup: 'O-', createdBy: doctor._id, clinicId },
+      { name: 'Kavita Sharma', age: 32, gender: 'Female', phone: '+91-9001234572', email: 'kavita@email.com', address: 'Bangalore, Karnataka', bloodGroup: 'A-', createdBy: doctor._id, clinicId },
+      { name: 'Deepak Joshi', age: 60, gender: 'Male', phone: '+91-9001234573', email: 'deepak@email.com', address: 'Lucknow, UP', bloodGroup: 'B-', medicalNotes: [{ note: 'COPD - uses inhaler', createdBy: doctor._id }], createdBy: doctor._id, clinicId },
+      { name: 'Anjali Nair', age: 25, gender: 'Female', phone: '+91-9001234574', email: 'anjali@email.com', address: 'Chennai, Tamil Nadu', bloodGroup: 'O+', createdBy: doctor._id, clinicId }
     ]);
     console.log(`✅ Created ${patients.length} patients`);
 
     // Create appointments
     const today = new Date();
     const appointments = await Appointment.insertMany([
-      { patient: patients[0]._id, doctor: doctor._id, date: today, time: '09:00', status: 'Completed', reason: 'Diabetes follow-up', notes: 'Blood sugar levels improved', createdBy: doctor._id },
-      { patient: patients[1]._id, doctor: doctor._id, date: today, time: '09:30', status: 'Completed', reason: 'BP checkup', createdBy: assistant._id },
-      { patient: patients[2]._id, doctor: doctor._id, date: today, time: '10:00', status: 'In Consultation', reason: 'General checkup', createdBy: receptionist._id },
-      { patient: patients[3]._id, doctor: doctor._id, date: today, time: '10:30', status: 'Waiting', reason: 'Joint pain', createdBy: receptionist._id },
-      { patient: patients[4]._id, doctor: doctor._id, date: today, time: '11:00', status: 'Waiting', reason: 'Fever', createdBy: assistant._id },
-      { patient: patients[5]._id, doctor: doctor._id, date: new Date(today.getTime() + 86400000), time: '09:00', status: 'Waiting', reason: 'Skin allergy', createdBy: doctor._id },
-      { patient: patients[6]._id, doctor: doctor._id, date: new Date(today.getTime() + 86400000), time: '09:30', status: 'Waiting', reason: 'Breathing difficulty', createdBy: doctor._id },
-      { patient: patients[7]._id, doctor: doctor._id, date: new Date(today.getTime() + 172800000), time: '10:00', status: 'Waiting', reason: 'Routine checkup', createdBy: doctor._id },
-      { patient: patients[0]._id, doctor: doctor._id, date: new Date(today.getTime() - 86400000), time: '09:00', status: 'Completed', reason: 'Follow-up', createdBy: doctor._id },
-      { patient: patients[1]._id, doctor: doctor._id, date: new Date(today.getTime() - 172800000), time: '10:00', status: 'Completed', reason: 'BP monitoring', createdBy: doctor._id },
-      { patient: patients[3]._id, doctor: doctor._id, date: new Date(today.getTime() - 259200000), time: '11:00', status: 'Cancelled', reason: 'Follow-up', createdBy: doctor._id }
+      { patient: patients[0]._id, doctor: doctor._id, date: today, time: '09:00', status: 'Completed', reason: 'Diabetes follow-up', notes: 'Blood sugar levels improved', createdBy: doctor._id, clinicId },
+      { patient: patients[1]._id, doctor: doctor._id, date: today, time: '09:30', status: 'Completed', reason: 'BP checkup', createdBy: assistant._id, clinicId },
+      { patient: patients[2]._id, doctor: doctor._id, date: today, time: '10:00', status: 'In Consultation', reason: 'General checkup', createdBy: receptionist._id, clinicId },
+      { patient: patients[3]._id, doctor: doctor._id, date: today, time: '10:30', status: 'Waiting', reason: 'Joint pain', createdBy: receptionist._id, clinicId },
+      { patient: patients[4]._id, doctor: doctor._id, date: today, time: '11:00', status: 'Waiting', reason: 'Fever', createdBy: assistant._id, clinicId },
+      { patient: patients[5]._id, doctor: doctor._id, date: new Date(today.getTime() + 86400000), time: '09:00', status: 'Waiting', reason: 'Skin allergy', createdBy: doctor._id, clinicId },
+      { patient: patients[6]._id, doctor: doctor._id, date: new Date(today.getTime() + 86400000), time: '09:30', status: 'Waiting', reason: 'Breathing difficulty', createdBy: doctor._id, clinicId },
+      { patient: patients[7]._id, doctor: doctor._id, date: new Date(today.getTime() + 172800000), time: '10:00', status: 'Waiting', reason: 'Routine checkup', createdBy: doctor._id, clinicId },
+      { patient: patients[0]._id, doctor: doctor._id, date: new Date(today.getTime() - 86400000), time: '09:00', status: 'Completed', reason: 'Follow-up', createdBy: doctor._id, clinicId },
+      { patient: patients[1]._id, doctor: doctor._id, date: new Date(today.getTime() - 172800000), time: '10:00', status: 'Completed', reason: 'BP monitoring', createdBy: doctor._id, clinicId },
+      { patient: patients[3]._id, doctor: doctor._id, date: new Date(today.getTime() - 259200000), time: '11:00', status: 'Cancelled', reason: 'Follow-up', createdBy: doctor._id, clinicId }
     ]);
     console.log(`✅ Created ${appointments.length} appointments`);
 
     // Create medicines
     const medicines = await Medicine.insertMany([
-      { name: 'Paracetamol 500mg', genericName: 'Acetaminophen', stock: 200, batchNumber: 'PCM-2024-001', expiryDate: new Date('2026-12-31'), supplier: 'Sun Pharma', price: 2.5, category: 'Analgesic', createdBy: doctor._id },
-      { name: 'Amoxicillin 250mg', genericName: 'Amoxicillin', stock: 150, batchNumber: 'AMX-2024-001', expiryDate: new Date('2026-06-30'), supplier: 'Cipla', price: 8, category: 'Antibiotic', createdBy: doctor._id },
-      { name: 'Metformin 500mg', genericName: 'Metformin HCL', stock: 300, batchNumber: 'MET-2024-001', expiryDate: new Date('2027-03-31'), supplier: 'Dr. Reddy\'s', price: 3, category: 'Anti-diabetic', createdBy: doctor._id },
-      { name: 'Amlodipine 5mg', genericName: 'Amlodipine', stock: 8, batchNumber: 'AML-2024-001', expiryDate: new Date('2026-09-30'), supplier: 'Lupin', price: 5, category: 'Antihypertensive', lowStockThreshold: 10, createdBy: doctor._id },
-      { name: 'Omeprazole 20mg', genericName: 'Omeprazole', stock: 100, batchNumber: 'OMP-2024-001', expiryDate: new Date('2026-08-31'), supplier: 'Zydus', price: 4, category: 'Antacid', createdBy: doctor._id },
-      { name: 'Cetirizine 10mg', genericName: 'Cetirizine', stock: 5, batchNumber: 'CTZ-2024-001', expiryDate: new Date('2026-05-31'), supplier: 'Mankind', price: 2, category: 'Antihistamine', lowStockThreshold: 10, createdBy: doctor._id },
-      { name: 'Azithromycin 500mg', genericName: 'Azithromycin', stock: 75, batchNumber: 'AZT-2024-001', expiryDate: new Date('2026-11-30'), supplier: 'Alkem', price: 15, category: 'Antibiotic', createdBy: doctor._id },
-      { name: 'Ibuprofen 400mg', genericName: 'Ibuprofen', stock: 180, batchNumber: 'IBU-2024-001', expiryDate: new Date('2026-10-31'), supplier: 'Sun Pharma', price: 3.5, category: 'NSAID', createdBy: doctor._id },
-      { name: 'Salbutamol Inhaler', genericName: 'Salbutamol', stock: 3, batchNumber: 'SAL-2024-001', expiryDate: new Date('2026-04-15'), supplier: 'Cipla', price: 120, category: 'Bronchodilator', lowStockThreshold: 5, createdBy: doctor._id },
-      { name: 'Pantoprazole 40mg', genericName: 'Pantoprazole', stock: 90, batchNumber: 'PAN-2024-001', expiryDate: new Date('2027-01-31'), supplier: 'Torrent', price: 6, category: 'PPI', createdBy: doctor._id }
+      { name: 'Paracetamol 500mg', genericName: 'Acetaminophen', stock: 200, batchNumber: 'PCM-2024-001', expiryDate: new Date('2026-12-31'), supplier: 'Sun Pharma', price: 2.5, category: 'Analgesic', createdBy: doctor._id, clinicId },
+      { name: 'Amoxicillin 250mg', genericName: 'Amoxicillin', stock: 150, batchNumber: 'AMX-2024-001', expiryDate: new Date('2026-06-30'), supplier: 'Cipla', price: 8, category: 'Antibiotic', createdBy: doctor._id, clinicId },
+      { name: 'Metformin 500mg', genericName: 'Metformin HCL', stock: 300, batchNumber: 'MET-2024-001', expiryDate: new Date('2027-03-31'), supplier: 'Dr. Reddy\'s', price: 3, category: 'Anti-diabetic', createdBy: doctor._id, clinicId },
+      { name: 'Amlodipine 5mg', genericName: 'Amlodipine', stock: 8, batchNumber: 'AML-2024-001', expiryDate: new Date('2026-09-30'), supplier: 'Lupin', price: 5, category: 'Antihypertensive', lowStockThreshold: 10, createdBy: doctor._id, clinicId },
+      { name: 'Omeprazole 20mg', genericName: 'Omeprazole', stock: 100, batchNumber: 'OMP-2024-001', expiryDate: new Date('2026-08-31'), supplier: 'Zydus', price: 4, category: 'Antacid', createdBy: doctor._id, clinicId },
+      { name: 'Cetirizine 10mg', genericName: 'Cetirizine', stock: 5, batchNumber: 'CTZ-2024-001', expiryDate: new Date('2026-05-31'), supplier: 'Mankind', price: 2, category: 'Antihistamine', lowStockThreshold: 10, createdBy: doctor._id, clinicId },
+      { name: 'Azithromycin 500mg', genericName: 'Azithromycin', stock: 75, batchNumber: 'AZT-2024-001', expiryDate: new Date('2026-11-30'), supplier: 'Alkem', price: 15, category: 'Antibiotic', createdBy: doctor._id, clinicId },
+      { name: 'Ibuprofen 400mg', genericName: 'Ibuprofen', stock: 180, batchNumber: 'IBU-2024-001', expiryDate: new Date('2026-10-31'), supplier: 'Sun Pharma', price: 3.5, category: 'NSAID', createdBy: doctor._id, clinicId },
+      { name: 'Salbutamol Inhaler', genericName: 'Salbutamol', stock: 3, batchNumber: 'SAL-2024-001', expiryDate: new Date('2026-04-15'), supplier: 'Cipla', price: 120, category: 'Bronchodilator', lowStockThreshold: 5, createdBy: doctor._id, clinicId },
+      { name: 'Pantoprazole 40mg', genericName: 'Pantoprazole', stock: 90, batchNumber: 'PAN-2024-001', expiryDate: new Date('2027-01-31'), supplier: 'Torrent', price: 6, category: 'PPI', createdBy: doctor._id, clinicId }
     ]);
     console.log(`✅ Created ${medicines.length} medicines`);
 

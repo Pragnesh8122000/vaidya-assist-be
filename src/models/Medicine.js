@@ -11,10 +11,13 @@ const medicineSchema = new mongoose.Schema({
   category: { type: String, trim: true },
   description: { type: String },
   lowStockThreshold: { type: Number, default: 10 },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
+  clinicId: { type: String, index: true }
 }, { timestamps: true });
 
 medicineSchema.index({ name: 'text', genericName: 'text' });
 medicineSchema.index({ expiryDate: 1 });
+medicineSchema.index({ clinicId: 1, category: 1 });
 
 module.exports = mongoose.model('Medicine', medicineSchema);
