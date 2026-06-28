@@ -117,6 +117,9 @@ const seed = async () => {
 
     // Ensure stable doctorId/clinicId UUIDs are materialized for the seeded owner.
     await doctor.ensureIdFields();
+    // Pin the demo clinic ID so the patient portal `.env` can match it out of the box.
+    doctor.clinicId = 'clinic-local-001';
+    await doctor.save();
     const clinicId = doctor.clinicId;
 
     const assistant = await User.create({
@@ -125,7 +128,8 @@ const seed = async () => {
       password: 'Password@123',
       phone: '+91-9876543211',
       role: assistantRole._id,
-      createdBy: doctor._id
+      createdBy: doctor._id,
+      clinicId,
     });
 
     const receptionist = await User.create({
@@ -134,7 +138,8 @@ const seed = async () => {
       password: 'Password@123',
       phone: '+91-9876543212',
       role: receptionistRole._id,
-      createdBy: doctor._id
+      createdBy: doctor._id,
+      clinicId,
     });
 
     const pharmacist = await User.create({
@@ -143,7 +148,8 @@ const seed = async () => {
       password: 'Password@123',
       phone: '+91-9876543213',
       role: pharmacistRole._id,
-      createdBy: doctor._id
+      createdBy: doctor._id,
+      clinicId,
     });
 
     console.log('✅ Created 4 users (doctor, assistant, receptionist, pharmacist)');

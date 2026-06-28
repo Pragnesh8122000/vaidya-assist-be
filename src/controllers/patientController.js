@@ -1,10 +1,14 @@
 const Patient = require('../models/Patient');
 
+function clinicScope(req) {
+  return req.clinicId ? { clinicId: req.clinicId } : {};
+}
+
 // Get all patients
 exports.getPatients = async (req, res, next) => {
   try {
     const { search, page = 1, limit = 10, gender, bloodGroup } = req.query;
-    const query = {};
+    const query = { ...clinicScope(req) };
 
     if (search) {
       query.$or = [
@@ -15,11 +19,6 @@ exports.getPatients = async (req, res, next) => {
     }
     if (gender) query.gender = gender;
     if (bloodGroup) query.bloodGroup = bloodGroup;
-
-    // Multi-clinic scoping: restrict to the authenticated user's clinic.
-    if (req.clinicId) {
-      query.clinicId = req.clinicId;
-    }
 
     const total = await Patient.countDocuments(query);
     const patients = await Patient.find(query)
@@ -41,7 +40,8 @@ exports.getPatients = async (req, res, next) => {
 // Get single patient
 exports.getPatient = async (req, res, next) => {
   try {
-    const patient = await Patient.findById(req.params.id)
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const patient = await Patient.findOne(query)
       .populate('createdBy', 'name')
       .populate('medicalNotes.createdBy', 'name');
     if (!patient) {
@@ -56,7 +56,16 @@ exports.getPatient = async (req, res, next) => {
 // Create patient
 exports.createPatient = async (req, res, next) => {
   try {
-    const patient = await Patient.create({ ...req.body, createdBy: req.user._id, clinicId: req.user.clinicId || req.clinicId });
+    if (!req.body.name || typeof req.body.name !== 'string' || req.body.name.trim().length === 0) {
+      return res.status(400).json({ success: false, message: 'Patient name is required.' });
+    }
+
+    const patient = await Patient.create({
+      ...req.body,
+      name: req.body.name.trim(),
+      createdBy: req.user._id,
+      clinicId: req.user.clinicId || req.clinicId
+    });
     res.status(201).json({ success: true, data: patient });
   } catch (error) {
     next(error);
@@ -66,9 +75,10 @@ exports.createPatient = async (req, res, next) => {
 // Update patient
 exports.updatePatient = async (req, res, next) => {
   try {
-    // Preserve clinic ownership on updates; ignore any clinicId supplied in body.
-    const { clinicId: _ignored, ...safeBody } = req.body;
-    const patient = await Patient.findByIdAndUpdate(req.params.id, safeBody, { new: true, runValidators: true });
+    // Preserve clinic ownership on updates; ignore any clinicId/createdBy supplied in body.
+    const { clinicId: _ignored, createdBy: _ignored2, ...safeBody } = req.body;
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const patient = await Patient.findOneAndUpdate(query, safeBody, { new: true, runValidators: true });
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }
@@ -81,7 +91,8 @@ exports.updatePatient = async (req, res, next) => {
 // Delete patient
 exports.deletePatient = async (req, res, next) => {
   try {
-    const patient = await Patient.findByIdAndDelete(req.params.id);
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const patient = await Patient.findOneAndDelete(query);
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }
@@ -94,7 +105,8 @@ exports.deletePatient = async (req, res, next) => {
 // Add medical note
 exports.addMedicalNote = async (req, res, next) => {
   try {
-    const patient = await Patient.findById(req.params.id);
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const patient = await Patient.findOne(query);
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }

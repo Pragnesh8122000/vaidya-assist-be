@@ -11,7 +11,7 @@ const userSchema = new mongoose.Schema({
   /** Stable external UUID for this doctor/staff. Used by agent-service for scoping. */
   doctorId: { type: String, unique: true, sparse: true, default: () => uuidv4() },
   /** Stable external UUID for the clinic this doctor/staff belongs to. */
-  clinicId: { type: String, unique: true, sparse: true, default: () => uuidv4() },
+  clinicId: { type: String, index: true, default: () => uuidv4() },
   avatar: { type: String },
   isActive: { type: Boolean, default: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

@@ -1,4 +1,5 @@
 const Appointment = require('../models/Appointment');
+const { startOfDayUTC, endOfDayUTC, getTodayRangeUTC } = require('../utils/date');
 
 // Get all appointments
 exports.getAppointments = async (req, res, next) => {
@@ -7,11 +8,10 @@ exports.getAppointments = async (req, res, next) => {
     const query = {};
 
     if (date) {
-      const d = new Date(date);
-      query.date = { $gte: new Date(d.setHours(0, 0, 0, 0)), $lte: new Date(d.setHours(23, 59, 59, 999)) };
+      query.date = { $gte: startOfDayUTC(date), $lte: endOfDayUTC(date) };
     }
     if (startDate && endDate) {
-      query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+      query.date = { $gte: startOfDayUTC(startDate), $lte: endOfDayUTC(endDate) };
     }
     if (status) query.status = status;
     if (doctor) query.doctor = doctor;
@@ -44,9 +44,7 @@ exports.getAppointments = async (req, res, next) => {
 // Get today's appointments for the authenticated doctor
 exports.getTodayAppointments = async (req, res, next) => {
   try {
-    const today = new Date();
-    const start = new Date(today.setHours(0, 0, 0, 0));
-    const end = new Date(today.setHours(23, 59, 59, 999));
+    const { start, end } = getTodayRangeUTC();
 
     const appointments = await Appointment.find({
       doctor: req.user._id,
@@ -68,11 +66,11 @@ exports.getTodayAppointments = async (req, res, next) => {
 exports.getUpcomingAppointments = async (req, res, next) => {
   try {
     const { limit = 10 } = req.query;
-    const now = new Date();
+    const { start } = getTodayRangeUTC();
 
     const appointments = await Appointment.find({
       doctor: req.user._id,
-      date: { $gte: now },
+      date: { $gte: start },
       ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     })
       .populate('patient', 'name phone age gender')
@@ -94,7 +92,7 @@ exports.getCalendarAppointments = async (req, res, next) => {
     const query = {};
 
     if (startDate && endDate) {
-      query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+      query.date = { $gte: startOfDayUTC(startDate), $lte: endOfDayUTC(endDate) };
     }
 
     // Multi-clinic scoping: restrict to the authenticated user's clinic.
@@ -116,33 +114,68 @@ exports.getCalendarAppointments = async (req, res, next) => {
 // Get single appointment
 exports.getAppointment = async (req, res, next) => {
   try {
-    const appointment = await Appointment.findById(req.params.id)
+    const query = { _id: req.params.id };
+    if (req.clinicId) query.clinicId = req.clinicId;
+
+    const appointment = await Appointment.findOne(query)
       .populate('patient')
       .populate('doctor', 'name email')
       .populate('createdBy', 'name');
+
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
+
     res.json({ success: true, data: appointment });
   } catch (error) {
     next(error);
   }
 };
 
+// Validate the fields required for an appointment.
+function validateAppointmentBody(body) {
+  const { patient, date, time } = body;
+  const errors = [];
+  if (!patient) errors.push('Patient is required.');
+  if (!date) errors.push('Date is required.');
+  if (!time || typeof time !== 'string' || !/^\d{2}:\d{2}$/.test(time)) {
+    errors.push('Time is required and must be in HH:MM format.');
+  }
+  return errors;
+}
+
 // Create appointment
 exports.createAppointment = async (req, res, next) => {
   try {
-    // The agent-service sends a UUID doctorId, but Mongo expects the
-    // authenticated user's ObjectId. Force the doctor to the current user.
-    const appointment = await Appointment.create({
+    const validationErrors = validateAppointmentBody(req.body);
+    if (validationErrors.length) {
+      return res.status(400).json({ success: false, message: 'Validation Error', errors: validationErrors });
+    }
+
+    // The agent-service may send a UUID doctorId, but Mongo expects the
+    // authenticated user's ObjectId. Force the doctor to the current user
+    // (the agent always calls on behalf of the doctor who owns the token).
+    const payload = {
       ...req.body,
       doctor: req.user._id,
       createdBy: req.user._id,
       clinicId: req.user.clinicId || req.clinicId,
-    });
+    };
+
+    // Normalize the date to UTC midnight so the separate `time` string fully
+    // describes the slot and the unique index prevents double-booking.
+    if (payload.date) {
+      payload.date = startOfDayUTC(payload.date);
+    }
+
+    // Remove fields that should not be set from the request.
+    delete payload.clinic;
+
+    const appointment = await Appointment.create(payload);
     const populated = await Appointment.findById(appointment._id)
       .populate('patient', 'name phone')
-      .populate('doctor', 'name');
+      .populate('doctor', 'name')
+      .populate('createdBy', 'name');
 
     // Emit socket event
     const io = req.app.get('io');
@@ -152,6 +185,9 @@ exports.createAppointment = async (req, res, next) => {
 
     res.status(201).json({ success: true, data: populated });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+    }
     next(error);
   }
 };
@@ -159,9 +195,26 @@ exports.createAppointment = async (req, res, next) => {
 // Update appointment
 exports.updateAppointment = async (req, res, next) => {
   try {
-    const appointment = await Appointment.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    const query = { _id: req.params.id };
+    if (req.clinicId) query.clinicId = req.clinicId;
+
+    // Prevent mass-assignment of identity/scoping fields.
+    const allowedUpdates = { ...req.body };
+    delete allowedUpdates._id;
+    delete allowedUpdates.doctor;
+    delete allowedUpdates.patient;
+    delete allowedUpdates.clinicId;
+    delete allowedUpdates.clinic;
+    delete allowedUpdates.createdBy;
+
+    if (allowedUpdates.date) {
+      allowedUpdates.date = startOfDayUTC(allowedUpdates.date);
+    }
+
+    const appointment = await Appointment.findOneAndUpdate(query, allowedUpdates, { new: true, runValidators: true })
       .populate('patient', 'name phone')
       .populate('doctor', 'name');
+
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
@@ -177,6 +230,9 @@ exports.updateAppointment = async (req, res, next) => {
 
     res.json({ success: true, data: appointment });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+    }
     next(error);
   }
 };
@@ -184,7 +240,10 @@ exports.updateAppointment = async (req, res, next) => {
 // Delete appointment
 exports.deleteAppointment = async (req, res, next) => {
   try {
-    const appointment = await Appointment.findByIdAndDelete(req.params.id);
+    const query = { _id: req.params.id };
+    if (req.clinicId) query.clinicId = req.clinicId;
+
+    const appointment = await Appointment.findOneAndDelete(query);
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }

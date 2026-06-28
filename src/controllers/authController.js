@@ -63,7 +63,7 @@ exports.registerPatient = async (req, res, next) => {
       role: patientRole._id
     });
 
-    // Create Patient record
+    // Create Patient record (scoped to the clinic that owns this patient portal)
     const patient = await Patient.create({
       name,
       email,
@@ -73,7 +73,8 @@ exports.registerPatient = async (req, res, next) => {
       address,
       bloodGroup,
       user: user._id,
-      createdBy: user._id // Patient is technically created by themselves here
+      createdBy: user._id, // Patient is technically created by themselves here
+      clinicId: req.body.clinicId || undefined,
     });
 
     // Link Patient back to User

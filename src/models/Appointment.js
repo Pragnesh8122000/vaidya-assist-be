@@ -18,9 +18,10 @@ const appointmentSchema = new mongoose.Schema({
   clinicId: { type: String, index: true }
 }, { timestamps: true });
 
-appointmentSchema.index({ date: 1, doctor: 1 });
 appointmentSchema.index({ patient: 1 });
 appointmentSchema.index({ status: 1 });
 appointmentSchema.index({ clinicId: 1, date: 1 });
+// Prevent the same doctor from being double-booked at the same date/time.
+appointmentSchema.index({ doctor: 1, date: 1, time: 1 }, { unique: true });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Patient = require('../models/Patient');
 const Appointment = require('../models/Appointment');
+const { startOfDayUTC, endOfDayUTC } = require('../utils/date');
 
 // Get authenticated patient profile
 exports.getPatientProfile = async (req, res, next) => {
@@ -46,9 +47,7 @@ exports.updatePatientProfile = async (req, res, next) => {
 // Get list of doctors available for booking
 exports.getDoctors = async (req, res, next) => {
   try {
-    const doctors = await User.find({
-      $exists: { role: true }
-    }).populate('role');
+    const doctors = await User.find({ role: { $exists: true } }).populate('role');
 
     // Filter users who have the 'doctor' role
     const filteredDoctors = doctors.filter(user =>
@@ -66,6 +65,25 @@ exports.bookAppointment = async (req, res, next) => {
   try {
     const { doctorId, date, time, reason } = req.body;
 
+    // Validate required fields
+    if (!doctorId || !date || !time) {
+      return res.status(400).json({ success: false, message: 'Doctor, date and time are required.' });
+    }
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      return res.status(400).json({ success: false, message: 'Time must be in HH:MM format.' });
+    }
+
+    const appointmentDate = startOfDayUTC(date);
+    if (Number.isNaN(appointmentDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid appointment date.' });
+    }
+
+    // Optional: prevent booking in the past (allow today).
+    const todayStart = startOfDayUTC(new Date());
+    if (appointmentDate < todayStart) {
+      return res.status(400).json({ success: false, message: 'Cannot book an appointment in the past.' });
+    }
+
     if (!req.user.patientProfile) {
       return res.status(400).json({ success: false, message: 'No patient profile associated with this user.' });
     }
@@ -76,29 +94,37 @@ exports.bookAppointment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid doctor selected.' });
     }
 
-    // Check for conflict (simplified check)
+    // Scope the conflict check to the same UTC day so it matches stored dates.
     const conflict = await Appointment.findOne({
       doctor: doctorId,
-      date: new Date(date),
-      time: time
+      date: { $gte: startOfDayUTC(date), $lte: endOfDayUTC(date) },
+      time: time,
     });
 
     if (conflict) {
-      return res.status(400).json({ success: false, message: 'This time slot is already booked.' });
+      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
     }
 
     const appointment = await Appointment.create({
       patient: req.user.patientProfile,
       doctor: doctorId,
-      date: new Date(date),
+      date: appointmentDate,
       time: time,
       reason: reason,
       status: 'Waiting',
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      // Inherit the doctor's clinic so the appointment is visible to clinic staff.
+      clinicId: doctor.clinicId || req.clinicId,
     });
 
-    res.status(201).json({ success: true, data: appointment });
+    const populated = await Appointment.findById(appointment._id)
+      .populate('doctor', 'name email');
+
+    res.status(201).json({ success: true, data: populated });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+    }
     next(error);
   }
 };

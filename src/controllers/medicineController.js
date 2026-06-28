@@ -41,10 +41,15 @@ exports.getMedicines = async (req, res, next) => {
   }
 };
 
+function clinicScope(req) {
+  return req.clinicId ? { clinicId: req.clinicId } : {};
+}
+
 // Get single medicine
 exports.getMedicine = async (req, res, next) => {
   try {
-    const medicine = await Medicine.findById(req.params.id);
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const medicine = await Medicine.findOne(query);
     if (!medicine) {
       return res.status(404).json({ success: false, message: 'Medicine not found.' });
     }
@@ -57,7 +62,16 @@ exports.getMedicine = async (req, res, next) => {
 // Create medicine
 exports.createMedicine = async (req, res, next) => {
   try {
-    const medicine = await Medicine.create({ ...req.body, createdBy: req.user._id, clinicId: req.user.clinicId || req.clinicId });
+    const { name, stock } = req.body;
+    if (!name || stock === undefined || stock === null || stock === '') {
+      return res.status(400).json({ success: false, message: 'Medicine name and stock are required.' });
+    }
+
+    const medicine = await Medicine.create({
+      ...req.body,
+      createdBy: req.user._id,
+      clinicId: req.user.clinicId || req.clinicId,
+    });
     res.status(201).json({ success: true, data: medicine });
   } catch (error) {
     next(error);
@@ -67,9 +81,10 @@ exports.createMedicine = async (req, res, next) => {
 // Update medicine
 exports.updateMedicine = async (req, res, next) => {
   try {
-    // Preserve clinic ownership on updates; ignore any clinicId supplied in body.
-    const { clinicId: _ignored, ...safeBody } = req.body;
-    const medicine = await Medicine.findByIdAndUpdate(req.params.id, safeBody, { new: true, runValidators: true });
+    // Preserve clinic ownership on updates; ignore any clinicId/createdBy supplied in body.
+    const { clinicId: _ignored, createdBy: _ignored2, ...safeBody } = req.body;
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const medicine = await Medicine.findOneAndUpdate(query, safeBody, { new: true, runValidators: true });
     if (!medicine) {
       return res.status(404).json({ success: false, message: 'Medicine not found.' });
     }
@@ -82,7 +97,8 @@ exports.updateMedicine = async (req, res, next) => {
 // Delete medicine
 exports.deleteMedicine = async (req, res, next) => {
   try {
-    const medicine = await Medicine.findByIdAndDelete(req.params.id);
+    const query = { _id: req.params.id, ...clinicScope(req) };
+    const medicine = await Medicine.findOneAndDelete(query);
     if (!medicine) {
       return res.status(404).json({ success: false, message: 'Medicine not found.' });
     }

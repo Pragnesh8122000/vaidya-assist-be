@@ -1,6 +1,7 @@
 const Appointment = require('../models/Appointment');
 const Patient = require('../models/Patient');
 const Medicine = require('../models/Medicine');
+const { startOfDayUTC } = require('../utils/date');
 
 // Base scoping filter for the authenticated clinic. New documents store
 // clinicId explicitly; legacy data should be backfilled via migration.
@@ -11,10 +12,9 @@ function clinicScope(req) {
 // Get dashboard statistics
 exports.getDashboardStats = async (req, res, next) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfDayUTC(new Date());
     const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
     const scope = clinicScope(req);
 
@@ -40,8 +40,8 @@ exports.getAppointmentChart = async (req, res, next) => {
   try {
     const days = parseInt(req.query.days) || 7;
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    startDate.setHours(0, 0, 0, 0);
+    startDate.setUTCDate(startDate.getUTCDate() - days);
+    startDate.setUTCHours(0, 0, 0, 0);
 
     const data = await Appointment.aggregate([
       { $match: { ...clinicScope(req), date: { $gte: startDate } } },
@@ -67,7 +67,8 @@ exports.getPatientVisitStats = async (req, res, next) => {
   try {
     const months = parseInt(req.query.months) || 6;
     const startDate = new Date();
-    startDate.setMonth(startDate.getMonth() - months);
+    startDate.setUTCMonth(startDate.getUTCMonth() - months);
+    startDate.setUTCHours(0, 0, 0, 0);
 
     const data = await Appointment.aggregate([
       { $match: { ...clinicScope(req), date: { $gte: startDate }, status: 'Completed' } },
