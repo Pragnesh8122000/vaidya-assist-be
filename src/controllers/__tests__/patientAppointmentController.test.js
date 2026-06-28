@@ -5,9 +5,11 @@ const {
 } = require('../patientAppointmentController');
 const User = require('../../models/User');
 const Appointment = require('../../models/Appointment');
+const { fetchDoctors } = require('../../utils/doctorQuery');
 
 jest.mock('../../models/User');
 jest.mock('../../models/Appointment');
+jest.mock('../../utils/doctorQuery');
 
 function createRes() {
   return {
@@ -35,25 +37,22 @@ describe('patientAppointmentController', () => {
     jest.clearAllMocks();
   });
 
-  it('getDoctors filters users with doctor role', async () => {
-    const doctorRole = { slug: 'doctor' };
-    const assistantRole = { slug: 'assistant' };
-    User.find.mockReturnValue(createQueryChain([
-      { _id: 'doc-1', name: 'Dr. Rajesh', role: doctorRole },
-      { _id: 'usr-2', name: 'Priya', role: assistantRole },
-    ]));
+  it('getDoctors delegates to fetchDoctors', async () => {
+    const result = {
+      data: [{ _id: 'doc-1', name: 'Dr. Rajesh', role: { slug: 'doctor' } }],
+      count: 1,
+      pagination: { total: 1, page: 1, pages: 1, limit: 50 },
+    };
+    fetchDoctors.mockResolvedValue(result);
 
-    const req = {};
+    const req = { query: { search: 'Rajesh' } };
     const res = createRes();
     const next = jest.fn();
 
     await getDoctors(req, res, next);
 
-    expect(User.find).toHaveBeenCalledWith({ role: { $exists: true } });
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      data: [{ _id: 'doc-1', name: 'Dr. Rajesh', role: doctorRole }],
-    });
+    expect(fetchDoctors).toHaveBeenCalledWith({ search: 'Rajesh' });
+    expect(res.json).toHaveBeenCalledWith({ success: true, ...result });
     expect(next).not.toHaveBeenCalled();
   });
 

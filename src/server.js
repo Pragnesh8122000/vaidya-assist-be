@@ -16,6 +16,7 @@ const setupSocket = require('./socket');
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const patientRoutes = require('./routes/patientRoutes');
+const doctorRoutes = require('./routes/doctorRoutes');
 const patientAppointmentRoutes = require('./routes/patientAppointmentRoutes');
 const appointmentRoutes = require('./routes/appointmentRoutes');
 const medicineRoutes = require('./routes/medicineRoutes');
@@ -79,6 +80,7 @@ const startServer = async () => {
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/patients', patientRoutes);
+  app.use('/api/doctors', doctorRoutes);
   app.use('/api/patient-portal', patientAppointmentRoutes);
   app.use('/api/appointments', appointmentRoutes);
   app.use('/api/medicines', medicineRoutes);
