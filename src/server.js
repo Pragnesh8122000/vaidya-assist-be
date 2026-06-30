@@ -42,6 +42,7 @@ const startServer = async () => {
     'http://localhost:5175',
     'https://vaidya-assist-be.onrender.com',
     'https://vaidya-assist-fe.vercel.app',
+    'https://vaidya-assist-appointment.vercel.app'
   ];
 
   const io = new Server(server, {
