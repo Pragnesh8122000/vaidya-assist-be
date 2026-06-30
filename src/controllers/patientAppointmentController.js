@@ -1,6 +1,9 @@
 const User = require('../models/User');
 const Patient = require('../models/Patient');
 const Appointment = require('../models/Appointment');
+const File = require('../models/File');
+const path = require('path');
+const fs = require('fs');
 const { fetchDoctors } = require('../utils/doctorQuery');
 const { startOfDayUTC, endOfDayUTC } = require('../utils/date');
 
@@ -84,6 +87,27 @@ exports.bookAppointment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'No patient profile associated with this user.' });
     }
 
+    const patient = await Patient.findById(req.user.patientProfile);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+
+    // Resolve "booking for" metadata. `patient` always remains the registered
+    // portal user (the booker); bookedFor records the actual subject.
+    let bookedFor = { type: 'myself', dependentName: patient.name };
+    const incomingBookedFor = req.body.bookedFor;
+    if (incomingBookedFor && incomingBookedFor.type === 'dependent') {
+      const dependent = patient.dependents.id(incomingBookedFor.dependentId);
+      if (!dependent) {
+        return res.status(400).json({ success: false, message: 'Selected dependent was not found in your profile.' });
+      }
+      bookedFor = {
+        type: 'dependent',
+        dependentId: dependent._id,
+        dependentName: dependent.name,
+      };
+    }
+
     // Validate doctor exists and is a doctor
     const doctor = await User.findById(doctorId).populate('role');
     if (!doctor || !doctor.role || doctor.role.slug !== 'doctor') {
@@ -108,6 +132,7 @@ exports.bookAppointment = async (req, res, next) => {
       time: time,
       reason: reason,
       status: 'Waiting',
+      bookedFor,
       createdBy: req.user._id,
       // Inherit the doctor's clinic so the appointment is visible to clinic staff.
       clinicId: doctor.clinicId || req.clinicId,
@@ -348,6 +373,195 @@ exports.getAvailableSlots = async (req, res, next) => {
     }));
 
     res.json({ success: true, data: { date: date, doctorId: doctorId, doctorName: doctor.name, slots: availableSlots } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Dependents (book-for-someone-else, audit #22)
+// Dependents live inside the authenticated patient's own Patient document, so
+// no cross-Patient scoping is required. All handlers are keyed on
+// req.user.patientProfile.
+// ---------------------------------------------------------------------------
+
+// List the authenticated patient's dependents
+exports.getDependents = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const patient = await Patient.findById(req.user.patientProfile).select('dependents');
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    res.json({ success: true, data: patient.dependents });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Add a dependent
+exports.addDependent = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const { name, age, gender, bloodGroup, relation } = req.body;
+    if (!name || !relation) {
+      return res.status(400).json({ success: false, message: 'Name and relation are required for a dependent.' });
+    }
+    const patient = await Patient.findById(req.user.patientProfile);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    patient.dependents.push({ name, age, gender, bloodGroup, relation });
+    await patient.save();
+    res.status(201).json({ success: true, data: patient.dependents });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update a dependent
+exports.updateDependent = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const patient = await Patient.findById(req.user.patientProfile);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const dependent = patient.dependents.id(req.params.id);
+    if (!dependent) {
+      return res.status(404).json({ success: false, message: 'Dependent not found.' });
+    }
+    const { name, age, gender, bloodGroup, relation } = req.body;
+    if (name !== undefined) dependent.name = name;
+    if (age !== undefined) dependent.age = age;
+    if (gender !== undefined) dependent.gender = gender;
+    if (bloodGroup !== undefined) dependent.bloodGroup = bloodGroup;
+    if (relation !== undefined) dependent.relation = relation;
+    await patient.save();
+    res.json({ success: true, data: patient.dependents });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Remove a dependent
+exports.removeDependent = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const patient = await Patient.findById(req.user.patientProfile);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+    const dependent = patient.dependents.id(req.params.id);
+    if (!dependent) {
+      return res.status(404).json({ success: false, message: 'Dependent not found.' });
+    }
+    patient.dependents.pull(req.params.id);
+    await patient.save();
+    res.json({ success: true, data: patient.dependents });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Prescription view (audit #23)
+// ---------------------------------------------------------------------------
+
+// Get the prescription for one of the patient's own appointments. Falls back
+// to any uploaded prescription files for the patient when no structured
+// prescription has been written yet.
+exports.getPrescription = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+
+    const appointment = await Appointment.findById(req.params.id)
+      .populate('doctor', 'name email');
+
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    }
+
+    // Ownership: the appointment must belong to the authenticated patient.
+    if (appointment.patient.toString() !== req.user.patientProfile.toString()) {
+      return res.status(403).json({ success: false, message: 'Unauthorized to view this prescription.' });
+    }
+
+    const hasStructured = appointment.prescription &&
+      Array.isArray(appointment.prescription.medications) &&
+      appointment.prescription.medications.length > 0;
+
+    // Fallback: scanned prescription files uploaded for this patient.
+    let files = [];
+    if (!hasStructured) {
+      files = await File.find({ patient: appointment.patient, type: 'Prescription' })
+        .populate('uploadedBy', 'name')
+        .sort('-createdAt')
+        .select('originalName mimetype size createdAt uploadedBy');
+    }
+
+    res.json({
+      success: true,
+      data: {
+        appointment: {
+          _id: appointment._id,
+          doctor: appointment.doctor,
+          date: appointment.date,
+          time: appointment.time,
+          status: appointment.status,
+          reason: appointment.reason,
+        },
+        prescription: hasStructured ? appointment.prescription : null,
+        files,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Patient-facing download of a prescription file attached to their own record.
+// Mirrors fileController.downloadFile but enforces patient ownership instead of
+// the staff-only `view_files` permission.
+exports.downloadPrescriptionFile = async (req, res, next) => {
+  try {
+    if (!req.user.patientProfile) {
+      return res.status(404).json({ success: false, message: 'Patient profile not found.' });
+    }
+
+    const appointment = await Appointment.findById(req.params.id).select('patient');
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    }
+    if (appointment.patient.toString() !== req.user.patientProfile.toString()) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
+    }
+
+    const file = await File.findById(req.params.fileId);
+    if (!file) {
+      return res.status(404).json({ success: false, message: 'File not found.' });
+    }
+    // The file must belong to this patient and be a prescription.
+    if (!file.patient || file.patient.toString() !== req.user.patientProfile.toString() || file.type !== 'Prescription') {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
+    }
+
+    const filePath = path.resolve(file.path);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'File not found on disk.' });
+    }
+
+    res.download(filePath, file.originalName);
   } catch (error) {
     next(error);
   }

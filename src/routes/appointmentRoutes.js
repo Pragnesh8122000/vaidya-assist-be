@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { auth, checkPermission } = require('../middleware/auth');
-const { getAppointments, getAppointment, createAppointment, updateAppointment, deleteAppointment, getCalendarAppointments, getTodayAppointments, getUpcomingAppointments } = require('../controllers/appointmentController');
+const { getAppointments, getAppointment, createAppointment, updateAppointment, deleteAppointment, getCalendarAppointments, getTodayAppointments, getUpcomingAppointments, setPrescription } = require('../controllers/appointmentController');
 
 router.use(auth);
 
@@ -11,6 +11,7 @@ router.get('/calendar', checkPermission('view_appointments'), getCalendarAppoint
 router.get('/:id', checkPermission('view_appointments'), getAppointment);
 router.post('/', checkPermission('manage_appointments'), createAppointment);
 router.put('/:id', checkPermission('manage_appointments'), updateAppointment);
+router.put('/:id/prescription', checkPermission('manage_appointments'), setPrescription);
 router.delete('/:id', checkPermission('manage_appointments'), deleteAppointment);
 
 module.exports = router;

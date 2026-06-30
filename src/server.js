@@ -25,6 +25,7 @@ const reportRoutes = require('./routes/reportRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const prescriptionTemplateRoutes = require('./routes/prescriptionTemplateRoutes');
 
 const startServer = async () => {
   // Connect to MongoDB first. If this fails, connectDB() calls process.exit(1)
@@ -84,6 +85,7 @@ const startServer = async () => {
   app.use('/api/doctors', doctorRoutes);
   app.use('/api/patient-portal', patientAppointmentRoutes);
   app.use('/api/appointments', appointmentRoutes);
+  app.use('/api/prescription-templates', prescriptionTemplateRoutes);
   app.use('/api/medicines', medicineRoutes);
   app.use('/api/files', fileRoutes);
   app.use('/api/reports', reportRoutes);

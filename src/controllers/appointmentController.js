@@ -237,6 +237,59 @@ exports.updateAppointment = async (req, res, next) => {
   }
 };
 
+// Attach a structured prescription to an appointment (doctor write path,
+// audit #23). Replaces any existing prescription on that visit.
+exports.setPrescription = async (req, res, next) => {
+  try {
+    const query = { _id: req.params.id };
+    if (req.clinicId) query.clinicId = req.clinicId;
+
+    const appointment = await Appointment.findOne(query);
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    }
+
+    const { medications = [], notes } = req.body;
+    if (!Array.isArray(medications)) {
+      return res.status(400).json({ success: false, message: 'medications must be an array.' });
+    }
+    // Basic validation: every medication needs a name.
+    for (const m of medications) {
+      if (!m || !m.name || !String(m.name).trim()) {
+        return res.status(400).json({ success: false, message: 'Each medication requires a name.' });
+      }
+    }
+
+    appointment.prescription = {
+      medications: medications.map((m) => ({
+        name: String(m.name).trim(),
+        dosage: m.dosage ? String(m.dosage).trim() : undefined,
+        frequency: m.frequency ? String(m.frequency).trim() : undefined,
+        duration: m.duration ? String(m.duration).trim() : undefined,
+        instructions: m.instructions ? String(m.instructions).trim() : undefined,
+      })),
+      notes: notes ? String(notes).trim() : '',
+      createdBy: req.user._id,
+      createdAt: new Date(),
+    };
+    await appointment.save();
+
+    const populated = await Appointment.findById(appointment._id)
+      .populate('patient', 'name phone')
+      .populate('doctor', 'name email')
+      .populate('prescription.createdBy', 'name');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('prescription:updated', populated);
+    }
+
+    res.json({ success: true, data: populated });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Delete appointment
 exports.deleteAppointment = async (req, res, next) => {
   try {

@@ -6,6 +6,17 @@ const medicalNoteSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// A family member / dependent the patient can book appointments on behalf of.
+// Stored inline so no cross-Patient scoping is required — the registered
+// patient remains the accountable portal user (and the Appointment.patient).
+const dependentSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  age: { type: Number },
+  gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+  bloodGroup: { type: String },
+  relation: { type: String, required: true, trim: true }
+}, { timestamps: true });
+
 const patientSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   age: { type: Number },
@@ -15,6 +26,7 @@ const patientSchema = new mongoose.Schema({
   address: { type: String },
   bloodGroup: { type: String },
   medicalNotes: [medicalNoteSchema],
+  dependents: [dependentSchema],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
