@@ -99,6 +99,6 @@ describe('dashboardController clinic scoping', () => {
     await getAppointmentStatusDist(req, res, next);
 
     const matchStage = Appointment.aggregate.mock.calls[0][0][0];
-    expect(matchStage).toEqual(expect.objectContaining({ $match: { clinicId: 'clinic-uuid' } }));
+    expect(matchStage).toEqual(expect.objectContaining({ $match: { clinicId: 'clinic-uuid', deletedAt: null } }));
   });
 });

@@ -1,4 +1,6 @@
 const Appointment = require('../models/Appointment');
+const { validateStatusTransition } = require('../models/Appointment');
+const { SLOT_TAKEN_MESSAGE } = require('../utils/appointmentSlots');
 const { startOfDayUTC, endOfDayUTC, getTodayRangeUTC } = require('../utils/date');
 
 // Get all appointments
@@ -21,6 +23,9 @@ exports.getAppointments = async (req, res, next) => {
     if (req.clinicId) {
       query.clinicId = req.clinicId;
     }
+
+    // Exclude soft-deleted appointments (audit BE-8).
+    query.deletedAt = null;
 
     const total = await Appointment.countDocuments(query);
     const appointments = await Appointment.find(query)
@@ -49,6 +54,7 @@ exports.getTodayAppointments = async (req, res, next) => {
     const appointments = await Appointment.find({
       doctor: req.user._id,
       date: { $gte: start, $lte: end },
+      deletedAt: null,
       ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     })
       .populate('patient', 'name phone age gender')
@@ -71,6 +77,7 @@ exports.getUpcomingAppointments = async (req, res, next) => {
     const appointments = await Appointment.find({
       doctor: req.user._id,
       date: { $gte: start },
+      deletedAt: null,
       ...(req.clinicId ? { clinicId: req.clinicId } : {}),
     })
       .populate('patient', 'name phone age gender')
@@ -100,6 +107,9 @@ exports.getCalendarAppointments = async (req, res, next) => {
       query.clinicId = req.clinicId;
     }
 
+    // Exclude soft-deleted appointments (audit BE-8).
+    query.deletedAt = null;
+
     const appointments = await Appointment.find(query)
       .populate('patient', 'name phone')
       .populate('doctor', 'name')
@@ -114,7 +124,7 @@ exports.getCalendarAppointments = async (req, res, next) => {
 // Get single appointment
 exports.getAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id };
+    const query = { _id: req.params.id, deletedAt: null };
     if (req.clinicId) query.clinicId = req.clinicId;
 
     const appointment = await Appointment.findOne(query)
@@ -168,6 +178,12 @@ exports.createAppointment = async (req, res, next) => {
       payload.date = startOfDayUTC(payload.date);
     }
 
+    // BE-5: prevent booking in the past (allow today). Mirrors the patient-side
+    // bookAppointment guard so the agent-service cannot create past appointments.
+    if (payload.date && payload.date.getTime() < startOfDayUTC(new Date()).getTime()) {
+      return res.status(400).json({ success: false, message: 'Cannot book an appointment in the past.' });
+    }
+
     // Remove fields that should not be set from the request.
     delete payload.clinic;
 
@@ -186,7 +202,7 @@ exports.createAppointment = async (req, res, next) => {
     res.status(201).json({ success: true, data: populated });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
     next(error);
   }
@@ -195,7 +211,7 @@ exports.createAppointment = async (req, res, next) => {
 // Update appointment
 exports.updateAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id };
+    const query = { _id: req.params.id, deletedAt: null };
     if (req.clinicId) query.clinicId = req.clinicId;
 
     // Prevent mass-assignment of identity/scoping fields.
@@ -209,6 +225,51 @@ exports.updateAppointment = async (req, res, next) => {
 
     if (allowedUpdates.date) {
       allowedUpdates.date = startOfDayUTC(allowedUpdates.date);
+    }
+
+    // Fetch the existing appointment for transition + reschedule re-validation.
+    // findOneAndUpdate bypasses pre('validate') hooks, so the model-level guard
+    // does not cover this path — validate here. Audit BE-6 / BE-7.
+    const existing = await Appointment.findOne(query).select('doctor date time status');
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    }
+
+    // BE-6: validate status transition when status is changing.
+    if (allowedUpdates.status && allowedUpdates.status !== existing.status) {
+      if (!validateStatusTransition(existing.status, allowedUpdates.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot change appointment status from '${existing.status}' to '${allowedUpdates.status}'.`,
+        });
+      }
+    }
+
+    // BE-7: when date or time changes, re-validate past-date + slot conflict.
+    const dateChanged = allowedUpdates.date !== undefined;
+    const timeChanged = allowedUpdates.time !== undefined && allowedUpdates.time !== existing.time;
+    if (dateChanged || timeChanged) {
+      const newDate = dateChanged ? allowedUpdates.date : existing.date;
+      const newTime = timeChanged ? allowedUpdates.time : existing.time;
+      if (newDate && newDate.getTime() < startOfDayUTC(new Date()).getTime()) {
+        return res.status(400).json({ success: false, message: 'Cannot move an appointment to a date in the past.' });
+      }
+      if (newTime && !/^\d{2}:\d{2}$/.test(newTime)) {
+        return res.status(400).json({ success: false, message: 'Time must be in HH:MM format.' });
+      }
+      if (newDate && newTime) {
+        const conflict = await Appointment.findOne({
+          doctor: existing.doctor,
+          date: { $gte: startOfDayUTC(newDate), $lte: endOfDayUTC(newDate) },
+          time: newTime,
+          status: { $ne: 'Cancelled' },
+          deletedAt: null,
+          _id: { $ne: req.params.id },
+        });
+        if (conflict) {
+          return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
+        }
+      }
     }
 
     const appointment = await Appointment.findOneAndUpdate(query, allowedUpdates, { new: true, runValidators: true })
@@ -231,7 +292,7 @@ exports.updateAppointment = async (req, res, next) => {
     res.json({ success: true, data: appointment });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
     next(error);
   }
@@ -241,7 +302,7 @@ exports.updateAppointment = async (req, res, next) => {
 // audit #23). Replaces any existing prescription on that visit.
 exports.setPrescription = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id };
+    const query = { _id: req.params.id, deletedAt: null };
     if (req.clinicId) query.clinicId = req.clinicId;
 
     const appointment = await Appointment.findOne(query);
@@ -290,16 +351,21 @@ exports.setPrescription = async (req, res, next) => {
   }
 };
 
-// Delete appointment
+// Delete appointment (soft-delete — audit BE-8). Marks the row deletedAt
+// instead of removing it, so deletes stay auditable/recoverable. Read paths
+// filter `deletedAt: null` so the row stops appearing.
 exports.deleteAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id };
+    const query = { _id: req.params.id, deletedAt: null };
     if (req.clinicId) query.clinicId = req.clinicId;
 
-    const appointment = await Appointment.findOneAndDelete(query);
+    const appointment = await Appointment.findOne(query);
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
+
+    appointment.deletedAt = new Date();
+    await appointment.save();
 
     const io = req.app.get('io');
     if (io) {

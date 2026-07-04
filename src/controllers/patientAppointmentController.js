@@ -5,7 +5,13 @@ const File = require('../models/File');
 const path = require('path');
 const fs = require('fs');
 const { fetchDoctors } = require('../utils/doctorQuery');
-const { startOfDayUTC, endOfDayUTC } = require('../utils/date');
+const { startOfDayUTC } = require('../utils/date');
+const {
+  SLOT_TAKEN_MESSAGE,
+  DEFAULT_SLOT_GRID,
+  isSlotTaken,
+  getBookedTimes,
+} = require('../utils/appointmentSlots');
 
 // Get authenticated patient profile
 exports.getPatientProfile = async (req, res, next) => {
@@ -114,15 +120,21 @@ exports.bookAppointment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid doctor selected.' });
     }
 
-    // Scope the conflict check to the same UTC day so it matches stored dates.
-    const conflict = await Appointment.findOne({
-      doctor: doctorId,
-      date: { $gte: startOfDayUTC(date), $lte: endOfDayUTC(date) },
-      time: time,
-    });
+    // BE-4: validate clinic consistency. Lenient — only reject when BOTH the
+    // patient and the doctor have a clinicId AND they differ. Self-registered
+    // patients often have no clinicId set (the registration form does not always
+    // send one), so strict equality would block them from booking. Audit BE-4.
+    if (patient.clinicId && doctor.clinicId && patient.clinicId !== doctor.clinicId) {
+      return res.status(403).json({ success: false, message: 'Doctor and patient belong to different clinics.' });
+    }
 
-    if (conflict) {
-      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+    // Scope the conflict check to the same UTC day so it matches stored dates.
+    // Exclude Cancelled appointments so a freed slot can be rebooked — this
+    // stays in sync with the partial unique index (audit DB-1 / BE-1).
+    const slotTaken = await isSlotTaken(doctorId, date, time);
+
+    if (slotTaken) {
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
 
     const appointment = await Appointment.create({
@@ -144,7 +156,7 @@ exports.bookAppointment = async (req, res, next) => {
     res.status(201).json({ success: true, data: populated });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ success: false, message: 'This time slot is already booked.' });
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
     next(error);
   }
@@ -163,6 +175,9 @@ exports.getPatientAppointments = async (req, res, next) => {
     if (req.query.status) {
       query.status = req.query.status;
     }
+
+    // Exclude soft-deleted appointments (audit BE-8).
+    query.deletedAt = null;
 
     const appointments = await Appointment.find(query)
       .populate('doctor', 'name email')
@@ -184,7 +199,7 @@ exports.getAppointmentDetails = async (req, res, next) => {
     const appointment = await Appointment.findById(req.params.id)
       .populate('doctor', 'name email');
 
-    if (!appointment) {
+    if (!appointment || appointment.deletedAt) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -208,7 +223,7 @@ exports.cancelAppointment = async (req, res, next) => {
 
     const appointment = await Appointment.findById(req.params.id);
 
-    if (!appointment) {
+    if (!appointment || appointment.deletedAt) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -217,11 +232,12 @@ exports.cancelAppointment = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Unauthorized to cancel this appointment.' });
     }
 
-    // Only allow cancelling appointments that are in 'Waiting' status
-    if (appointment.status !== 'Waiting') {
+    // Only allow cancelling appointments that are in 'Waiting' or 'Confirmed'
+    // status. §3.2 (OQ#3=Option B): 'Confirmed' is cancellable like 'Waiting'.
+    if (appointment.status !== 'Waiting' && appointment.status !== 'Confirmed') {
       return res.status(400).json({
         success: false,
-        message: `Cannot cancel appointment with status '${appointment.status}'. Only 'Waiting' appointments can be cancelled.`,
+        message: `Cannot cancel appointment with status '${appointment.status}'. Only 'Waiting' or 'Confirmed' appointments can be cancelled.`,
       });
     }
 
@@ -278,7 +294,7 @@ exports.rescheduleAppointment = async (req, res, next) => {
 
     const appointment = await Appointment.findById(req.params.id);
 
-    if (!appointment) {
+    if (!appointment || appointment.deletedAt) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -287,24 +303,22 @@ exports.rescheduleAppointment = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Unauthorized to reschedule this appointment.' });
     }
 
-    // Only allow rescheduling appointments that are in 'Waiting' status
-    if (appointment.status !== 'Waiting') {
+    // Only allow rescheduling appointments that are in 'Waiting' or 'Confirmed'
+    // status. §3.2 (OQ#3=Option B): 'Confirmed' is reschedulable like 'Waiting'.
+    if (appointment.status !== 'Waiting' && appointment.status !== 'Confirmed') {
       return res.status(400).json({
         success: false,
-        message: `Cannot reschedule appointment with status '${appointment.status}'. Only 'Waiting' appointments can be rescheduled.`,
+        message: `Cannot reschedule appointment with status '${appointment.status}'. Only 'Waiting' or 'Confirmed' appointments can be rescheduled.`,
       });
     }
 
-    // Check if the new time slot is available for the same doctor
-    const conflict = await Appointment.findOne({
-      doctor: appointment.doctor,
-      date: { $gte: startOfDayUTC(date), $lte: endOfDayUTC(date) },
-      time: time,
-      status: { $ne: 'Cancelled' },
-    });
+    // Check if the new time slot is available for the same doctor. Exclude the
+    // appointment being rescheduled from the conflict set. The status filter
+    // stays in sync with the partial unique index (audit DB-1 / BE-3).
+    const slotTaken = await isSlotTaken(appointment.doctor, date, time, appointment._id);
 
-    if (conflict) {
-      return res.status(409).json({ success: false, message: 'The requested time slot is already booked.' });
+    if (slotTaken) {
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
 
     appointment.date = newDate;
@@ -324,7 +338,7 @@ exports.rescheduleAppointment = async (req, res, next) => {
     res.json({ success: true, data: populated });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ success: false, message: 'The requested time slot is already booked.' });
+      return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
     }
     next(error);
   }
@@ -351,21 +365,14 @@ exports.getAvailableSlots = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Doctor not found.' });
     }
 
-    // Define available time slots (09:00 to 17:00, 30-minute intervals)
-    const allSlots = [];
-    for (let hour = 9; hour < 17; hour++) {
-      allSlots.push(`${String(hour).padStart(2, '0')}:00`);
-      allSlots.push(`${String(hour).padStart(2, '0')}:30`);
-    }
+    // Available time slots come from the shared grid (09:00–17:00, 30-min) so
+    // the grid shown to patients matches the grid the booking flow validates
+    // against. Audit BE-9 tracks making this doctor-configurable.
+    const allSlots = DEFAULT_SLOT_GRID;
 
-    // Find all non-cancelled appointments for this doctor on this date
-    const bookedAppointments = await Appointment.find({
-      doctor: doctorId,
-      date: { $gte: startOfDayUTC(date), $lte: endOfDayUTC(date) },
-      status: { $ne: 'Cancelled' },
-    }).select('time -_id');
-
-    const bookedTimes = new Set(bookedAppointments.map(apt => apt.time));
+    // Booked times exclude Cancelled appointments — stays in sync with the
+    // partial unique index and with isSlotTaken (audit BE-2).
+    const bookedTimes = await getBookedTimes(doctorId, date);
 
     const availableSlots = allSlots.map(slot => ({
       time: slot,
@@ -488,7 +495,7 @@ exports.getPrescription = async (req, res, next) => {
     const appointment = await Appointment.findById(req.params.id)
       .populate('doctor', 'name email');
 
-    if (!appointment) {
+    if (!appointment || appointment.deletedAt) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -539,8 +546,8 @@ exports.downloadPrescriptionFile = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id).select('patient');
-    if (!appointment) {
+    const appointment = await Appointment.findById(req.params.id).select('patient deletedAt');
+    if (!appointment || appointment.deletedAt) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
     if (appointment.patient.toString() !== req.user.patientProfile.toString()) {

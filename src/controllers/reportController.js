@@ -15,6 +15,9 @@ exports.getAppointmentReport = async (req, res, next) => {
     }
     if (status) query.status = status;
 
+    // Exclude soft-deleted appointments (audit BE-8).
+    query.deletedAt = null;
+
     const appointments = await Appointment.find(query)
       .populate('patient', 'name phone')
       .populate('doctor', 'name')

@@ -20,8 +20,8 @@ exports.getDashboardStats = async (req, res, next) => {
 
     const [totalPatients, todayAppointments, pendingAppointments, totalMedicines, lowStockMedicines] = await Promise.all([
       Patient.countDocuments(scope),
-      Appointment.countDocuments({ ...scope, date: { $gte: today, $lt: tomorrow } }),
-      Appointment.countDocuments({ ...scope, status: { $in: ['Waiting', 'In Consultation'] } }),
+      Appointment.countDocuments({ ...scope, date: { $gte: today, $lt: tomorrow }, deletedAt: null }),
+      Appointment.countDocuments({ ...scope, status: { $in: ['Waiting', 'In Consultation'] }, deletedAt: null }),
       Medicine.countDocuments(scope),
       Medicine.countDocuments({ ...scope, $expr: { $lte: ['$stock', '$lowStockThreshold'] } })
     ]);
@@ -44,7 +44,7 @@ exports.getAppointmentChart = async (req, res, next) => {
     startDate.setUTCHours(0, 0, 0, 0);
 
     const data = await Appointment.aggregate([
-      { $match: { ...clinicScope(req), date: { $gte: startDate } } },
+      { $match: { ...clinicScope(req), date: { $gte: startDate }, deletedAt: null } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
@@ -71,7 +71,7 @@ exports.getPatientVisitStats = async (req, res, next) => {
     startDate.setUTCHours(0, 0, 0, 0);
 
     const data = await Appointment.aggregate([
-      { $match: { ...clinicScope(req), date: { $gte: startDate }, status: 'Completed' } },
+      { $match: { ...clinicScope(req), date: { $gte: startDate }, status: 'Completed', deletedAt: null } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m', date: '$date' } },
@@ -121,7 +121,7 @@ exports.getMedicineStockChart = async (req, res, next) => {
 exports.getAppointmentStatusDist = async (req, res, next) => {
   try {
     const data = await Appointment.aggregate([
-      { $match: clinicScope(req) },
+      { $match: { ...clinicScope(req), deletedAt: null } },
       {
         $group: {
           _id: '$status',

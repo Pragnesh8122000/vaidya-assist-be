@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { auth, checkPermission } = require('../middleware/auth');
+const { portalWriteLimiter } = require('../middleware/rateLimit');
 const patientController = require('../controllers/patientAppointmentController');
 
 // All patient routes require authentication
@@ -24,12 +25,12 @@ router.get('/doctors', checkPermission('view_own_appointments'), patientControll
 router.get('/doctors/:doctorId/slots', checkPermission('view_own_appointments'), patientController.getAvailableSlots);
 
 // Appointment routes
-router.post('/appointments', checkPermission('book_appointment'), patientController.bookAppointment);
+router.post('/appointments', portalWriteLimiter, checkPermission('book_appointment'), patientController.bookAppointment);
 router.get('/appointments', checkPermission('view_own_appointments'), patientController.getPatientAppointments);
 router.get('/appointments/:id', checkPermission('view_own_appointments'), patientController.getAppointmentDetails);
 router.get('/appointments/:id/prescription', checkPermission('view_own_appointments'), patientController.getPrescription);
 router.get('/appointments/:id/prescription/files/:fileId/download', checkPermission('view_own_appointments'), patientController.downloadPrescriptionFile);
-router.put('/appointments/:id/cancel', checkPermission('book_appointment'), patientController.cancelAppointment);
-router.patch('/appointments/:id/reschedule', checkPermission('book_appointment'), patientController.rescheduleAppointment);
+router.put('/appointments/:id/cancel', portalWriteLimiter, checkPermission('book_appointment'), patientController.cancelAppointment);
+router.patch('/appointments/:id/reschedule', portalWriteLimiter, checkPermission('book_appointment'), patientController.rescheduleAppointment);
 
 module.exports = router;

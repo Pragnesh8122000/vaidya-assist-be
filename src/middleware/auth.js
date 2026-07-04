@@ -40,7 +40,11 @@ const checkPermission = (...requiredPermissions) => {
 
     const userPermissions = req.user.role.permissions.map(p => p.slug);
 
-    // Doctor (super admin) has all permissions
+    // Doctor (super admin) has all permissions. This bypasses the permission
+    // gate only — clinic scoping is still enforced downstream in every
+    // controller via `req.clinicId` (set in `auth` from the token payload).
+    // `User.clinicId` has a uuidv4 default, so req.clinicId is always set for
+    // a real doctor, meaning a doctor never sees other clinics' data. Audit BE-10.
     if (req.user.role.slug === 'doctor') {
       return next();
     }

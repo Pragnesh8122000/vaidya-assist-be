@@ -1,5 +1,12 @@
 const errorHandler = (err, req, res, next) => {
-  console.error(err.stack);
+  // Avoid dumping raw stack traces (which can embed document bodies, query
+  // args, PII) to stdout in production. In dev we keep the full stack for
+  // debugging. Audit S-8 / BE-14.
+  if (process.env.NODE_ENV === 'production') {
+    console.error(`[errorHandler] ${err.name || 'Error'}: ${err.message || 'unknown'}`);
+  } else {
+    console.error(err.stack);
+  }
 
   if (err.name === 'ValidationError') {
     const messages = Object.values(err.errors).map(e => e.message);
@@ -15,10 +22,13 @@ const errorHandler = (err, req, res, next) => {
     return res.status(400).json({ success: false, message: 'Invalid ID format' });
   }
 
-  res.status(err.statusCode || 500).json({
-    success: false,
-    message: err.message || 'Internal Server Error'
-  });
+  const status = err.statusCode || 500;
+  // In production, never leak internal error messages for 5xx responses —
+  // return a generic message instead. Audit S-8.
+  const message = status >= 500 && process.env.NODE_ENV === 'production'
+    ? 'Internal Server Error'
+    : (err.message || 'Internal Server Error');
+  res.status(status).json({ success: false, message });
 };
 
 module.exports = errorHandler;

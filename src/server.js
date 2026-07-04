@@ -33,6 +33,7 @@ const startServer = async () => {
   // depends on the DB. Without this, mongoose only attempts to connect lazily
   // on the first findOne(), which then sits in the buffer queue and times out.
   await connectDB();
+  
 
   const app = express();
   const server = http.createServer(app);
@@ -85,7 +86,6 @@ const startServer = async () => {
   app.use('/api/doctors', doctorRoutes);
   app.use('/api/patient-portal', patientAppointmentRoutes);
   app.use('/api/appointments', appointmentRoutes);
-  app.use('/api/prescription-templates', prescriptionTemplateRoutes);
   app.use('/api/medicines', medicineRoutes);
   app.use('/api/files', fileRoutes);
   app.use('/api/reports', reportRoutes);

@@ -4,12 +4,23 @@ const {
   getPatientAppointments,
 } = require('../patientAppointmentController');
 const User = require('../../models/User');
+const Patient = require('../../models/Patient');
 const Appointment = require('../../models/Appointment');
 const { fetchDoctors } = require('../../utils/doctorQuery');
 
 jest.mock('../../models/User');
+jest.mock('../../models/Patient');
 jest.mock('../../models/Appointment');
 jest.mock('../../utils/doctorQuery');
+
+// A future date (today + 7 days, YYYY-MM-DD) used wherever a valid upcoming
+// booking date is needed. Hardcoded dates rot as the clock advances and start
+// hitting the past-date guard (audit FE/BE test rot).
+function futureDate(daysAhead = 7) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.toISOString().slice(0, 10);
+}
 
 function createRes() {
   return {
@@ -85,12 +96,13 @@ describe('patientAppointmentController', () => {
     const populated = { _id: 'apt-id', doctor: { name: 'Dr. Rajesh' } };
 
     User.findById.mockReturnValue(createQueryChain(doctor));
+    Patient.findById.mockResolvedValue({ _id: 'pat-profile-id', name: 'Test Patient', dependents: [] });
     Appointment.findOne.mockResolvedValue(null);
     Appointment.create.mockResolvedValue(created);
     Appointment.findById.mockReturnValue(createQueryChain(populated));
 
     const req = {
-      body: { doctorId: 'doc-id', date: '2026-06-28', time: '10:00', reason: 'Checkup' },
+      body: { doctorId: 'doc-id', date: futureDate(), time: '10:00', reason: 'Checkup' },
       user: { _id: 'pat-id', patientProfile: 'pat-profile-id' },
       clinicId: 'clinic-uuid',
     };
@@ -140,7 +152,7 @@ describe('patientAppointmentController', () => {
 
     await getPatientAppointments(req, res, next);
 
-    expect(Appointment.find).toHaveBeenCalledWith({ patient: 'pat-profile-id' });
+    expect(Appointment.find).toHaveBeenCalledWith({ patient: 'pat-profile-id', deletedAt: null });
     expect(res.json).toHaveBeenCalledWith({ success: true, data: appointments });
   });
 });

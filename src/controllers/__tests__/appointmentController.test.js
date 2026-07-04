@@ -10,6 +10,15 @@ const Appointment = require('../../models/Appointment');
 
 jest.mock('../../models/Appointment');
 
+// A future date (today + N days, YYYY-MM-DD) used wherever a valid upcoming
+// booking date is needed. Hardcoded dates rot as the clock advances and start
+// hitting the past-date guard (audit BE-5 / FE/BE test rot).
+function futureDate(daysAhead = 7) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.toISOString().slice(0, 10);
+}
+
 function createRes() {
   return {
     status: jest.fn().mockReturnThis(),
@@ -147,7 +156,7 @@ describe('appointmentController create/update/delete', () => {
     Appointment.findById.mockReturnValue(createPopulateChain(populated, 3));
 
     const req = {
-      body: { patient: 'patient-id', date: '2026-06-28', time: '10:00', reason: 'Checkup' },
+      body: { patient: 'patient-id', date: futureDate(), time: '10:00', reason: 'Checkup' },
       user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
       clinicId: 'clinic-uuid',
       app: createApp(),
@@ -179,7 +188,7 @@ describe('appointmentController create/update/delete', () => {
     Appointment.create.mockRejectedValue(err);
 
     const req = {
-      body: { patient: 'patient-id', date: '2026-06-28', time: '10:00' },
+      body: { patient: 'patient-id', date: futureDate(), time: '10:00' },
       user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
       clinicId: 'clinic-uuid',
       app: createApp(),
@@ -195,7 +204,16 @@ describe('appointmentController create/update/delete', () => {
   });
 
   it('updateAppointment strips protected fields and scopes by clinic', async () => {
+    const existing = { _id: 'apt-id', status: 'Waiting', doctor: 'doc-id', date: new Date(futureDate()), time: '10:00' };
     const updated = { _id: 'apt-id', status: 'Completed' };
+    // BE-7: updateAppointment now pre-fetches the existing record for transition
+    // + reschedule re-validation before calling findOneAndUpdate.
+    Appointment.findOne.mockReturnValue({
+      select: jest.fn().mockResolvedValue(existing),
+    });
+    // BE-6: validateStatusTransition is auto-mocked — default it to allow the
+    // Waiting → Completed transition this test exercises.
+    Appointment.validateStatusTransition.mockReturnValue(true);
     Appointment.findOneAndUpdate.mockReturnValue(createPopulateChain(updated, 2));
 
     const req = {
@@ -211,7 +229,7 @@ describe('appointmentController create/update/delete', () => {
     await updateAppointment(req, res, next);
 
     expect(Appointment.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'apt-id', clinicId: 'clinic-uuid' },
+      { _id: 'apt-id', clinicId: 'clinic-uuid', deletedAt: null },
       { status: 'Completed' },
       { new: true, runValidators: true },
     );
@@ -219,7 +237,9 @@ describe('appointmentController create/update/delete', () => {
   });
 
   it('deleteAppointment scopes by clinic and returns 404 if not found', async () => {
-    Appointment.findOneAndDelete.mockResolvedValue(null);
+    // BE-8: deleteAppointment now soft-deletes (findOne + save) instead of
+    // findOneAndDelete.
+    Appointment.findOne.mockResolvedValue(null);
 
     const req = {
       params: { id: 'missing-id' },
@@ -232,7 +252,7 @@ describe('appointmentController create/update/delete', () => {
 
     await deleteAppointment(req, res, next);
 
-    expect(Appointment.findOneAndDelete).toHaveBeenCalledWith({ _id: 'missing-id', clinicId: 'clinic-uuid' });
+    expect(Appointment.findOne).toHaveBeenCalledWith({ _id: 'missing-id', clinicId: 'clinic-uuid', deletedAt: null });
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
@@ -250,7 +270,7 @@ describe('appointmentController create/update/delete', () => {
 
     await getAppointment(req, res, next);
 
-    expect(Appointment.findOne).toHaveBeenCalledWith({ _id: 'apt-id', clinicId: 'clinic-uuid' });
+    expect(Appointment.findOne).toHaveBeenCalledWith({ _id: 'apt-id', clinicId: 'clinic-uuid', deletedAt: null });
     expect(res.json).toHaveBeenCalledWith({ success: true, data: appointment });
   });
 });
