@@ -323,9 +323,10 @@ exports.rescheduleAppointment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Cannot reschedule to a date in the past.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id);
+    const query = buildAliasQuery(req.params.id, 'displayId', { deletedAt: null });
+    const appointment = await Appointment.findOne(query);
 
-    if (!appointment || appointment.deletedAt) {
+    if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -523,10 +524,11 @@ exports.getPrescription = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id)
+    const query = buildAliasQuery(req.params.id, 'displayId', { deletedAt: null });
+    const appointment = await Appointment.findOne(query)
       .populate('doctor', 'name email');
 
-    if (!appointment || appointment.deletedAt) {
+    if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -553,6 +555,7 @@ exports.getPrescription = async (req, res, next) => {
       data: {
         appointment: {
           _id: appointment._id,
+          displayId: appointment.displayId,
           doctor: appointment.doctor,
           date: appointment.date,
           time: appointment.time,
@@ -577,8 +580,9 @@ exports.downloadPrescriptionFile = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id).select('patient deletedAt');
-    if (!appointment || appointment.deletedAt) {
+    const query = buildAliasQuery(req.params.id, 'displayId', { deletedAt: null });
+    const appointment = await Appointment.findOne(query).select('patient');
+    if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
     if (appointment.patient.toString() !== req.user.patientProfile.toString()) {

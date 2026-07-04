@@ -277,7 +277,7 @@ exports.updateAppointment = async (req, res, next) => {
           time: newTime,
           status: { $ne: 'Cancelled' },
           deletedAt: null,
-          _id: { $ne: req.params.id },
+          _id: { $ne: existing._id },
         });
         if (conflict) {
           return res.status(409).json({ success: false, message: SLOT_TAKEN_MESSAGE });
