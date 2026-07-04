@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const {
+  appointmentDisplayId,
+  nextAvailableDisplayId,
+} = require('../utils/publicIds');
 
 // A single medication line within a prescription.
 const medicationSchema = new mongoose.Schema({
@@ -47,13 +51,26 @@ const appointmentSchema = new mongoose.Schema({
     dependentName: { type: String, trim: true }
   },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  // BE-16: audit trail for status changes. Both fields are additive — existing
+  // rows have undefined/null values and are not migrated. Set by the doctor-side
+  // updateAppointment controller whenever it changes `status`. Stored on the
+  // appointment itself (not a separate audit collection) so the trail travels
+  // with the record and survives no extra join on read.
+  lastStatusChangedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  lastStatusChangedAt: { type: Date },
   /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
   clinicId: { type: String, index: true },
   // Soft-delete marker (audit BE-8). Null/missing = active; a Date = deleted.
   // Read paths filter `deletedAt: null` (matches both null and missing) so
   // soft-deleted rows stop appearing. The doctor-side deleteAppointment sets
   // this instead of removing the row, keeping deletes auditable/recoverable.
-  deletedAt: { type: Date, default: null, index: true }
+  deletedAt: { type: Date, default: null, index: true },
+  // Human-readable public code (e.g. APP_202607041430). Generated pre-save
+  // from `date`. Sparse + unique across the entire collection. The BE
+  // controllers accept this code as an alias for `_id` on /:id lookups via
+  // the resolveByIdOrCode helper. See scripts/backfillPublicIds.js to seed
+  // historical rows.
+  displayId: { type: String, unique: true, sparse: true, index: true }
 }, { timestamps: true });
 
 appointmentSchema.index({ patient: 1 });
@@ -104,6 +121,15 @@ appointmentSchema.pre('validate', async function () {
     err.name = 'ValidationError';
     throw err;
   }
+});
+
+// Generate a globally unique displayId (e.g. APP_202607041430) on first save
+// for new rows. Idempotent: skips when displayId is already set, so the
+// backfill script can re-run safely.
+appointmentSchema.pre('save', async function () {
+  if (this.displayId) return;
+  const base = appointmentDisplayId(this.date);
+  this.displayId = await nextAvailableDisplayId(this.constructor, base);
 });
 
 const Appointment = mongoose.model('Appointment', appointmentSchema);

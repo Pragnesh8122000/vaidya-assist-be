@@ -68,13 +68,15 @@ describe('patientController clinic scoping', () => {
   it('getPatient returns 404 for a patient outside the clinic', async () => {
     Patient.findOne.mockReturnValue(createPopulateChain(null, 2));
 
-    const req = { params: { id: 'pat-id' }, clinicId: 'clinic-uuid' };
+    // 24-char hex — exercises BOTH branches of buildAliasQuery.
+    const patId = '507f1f77bcf86cd799439011';
+    const req = { params: { id: patId }, clinicId: 'clinic-uuid' };
     const res = createRes();
     const next = jest.fn();
 
     await getPatient(req, res, next);
 
-    expect(Patient.findOne).toHaveBeenCalledWith({ _id: 'pat-id', clinicId: 'clinic-uuid' });
+    expect(Patient.findOne).toHaveBeenCalledWith({ $or: [{ _id: patId }, { displayId: patId }], clinicId: 'clinic-uuid' });
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
@@ -117,8 +119,9 @@ describe('patientController clinic scoping', () => {
     const updated = { _id: 'pat-id', name: 'Updated' };
     Patient.findOneAndUpdate.mockResolvedValue(updated);
 
+    const patId = '507f1f77bcf86cd799439011';
     const req = {
-      params: { id: 'pat-id' },
+      params: { id: patId },
       body: { name: 'Updated', clinicId: 'other', createdBy: 'other' },
       clinicId: 'clinic-uuid',
       user: { _id: 'doc-id' },
@@ -129,7 +132,7 @@ describe('patientController clinic scoping', () => {
     await updatePatient(req, res, next);
 
     expect(Patient.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'pat-id', clinicId: 'clinic-uuid' },
+      { $or: [{ _id: patId }, { displayId: patId }], clinicId: 'clinic-uuid' },
       { name: 'Updated' },
       { new: true, runValidators: true },
     );
@@ -138,13 +141,14 @@ describe('patientController clinic scoping', () => {
   it('deletePatient scopes by clinic', async () => {
     Patient.findOneAndDelete.mockResolvedValue(null);
 
-    const req = { params: { id: 'missing-id' }, clinicId: 'clinic-uuid' };
+    const missingId = '507f1f77bcf86cd799439099';
+    const req = { params: { id: missingId }, clinicId: 'clinic-uuid' };
     const res = createRes();
     const next = jest.fn();
 
     await deletePatient(req, res, next);
 
-    expect(Patient.findOneAndDelete).toHaveBeenCalledWith({ _id: 'missing-id', clinicId: 'clinic-uuid' });
+    expect(Patient.findOneAndDelete).toHaveBeenCalledWith({ $or: [{ _id: missingId }, { displayId: missingId }], clinicId: 'clinic-uuid' });
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
@@ -152,8 +156,9 @@ describe('patientController clinic scoping', () => {
     const patient = { medicalNotes: { push: jest.fn() }, save: jest.fn().mockResolvedValue() };
     Patient.findOne.mockResolvedValue(patient);
 
+    const patId = '507f1f77bcf86cd799439011';
     const req = {
-      params: { id: 'pat-id' },
+      params: { id: patId },
       body: { note: 'Follow-up required' },
       clinicId: 'clinic-uuid',
       user: { _id: 'doc-id' },
@@ -163,7 +168,7 @@ describe('patientController clinic scoping', () => {
 
     await addMedicalNote(req, res, next);
 
-    expect(Patient.findOne).toHaveBeenCalledWith({ _id: 'pat-id', clinicId: 'clinic-uuid' });
+    expect(Patient.findOne).toHaveBeenCalledWith({ $or: [{ _id: patId }, { displayId: patId }], clinicId: 'clinic-uuid' });
     expect(patient.medicalNotes.push).toHaveBeenCalledWith({ note: 'Follow-up required', createdBy: 'doc-id' });
   });
 });

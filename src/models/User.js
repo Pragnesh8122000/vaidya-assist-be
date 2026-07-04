@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const {
+  slugifyUsername,
+  nextAvailableUsername,
+} = require('../utils/publicIds');
 
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
@@ -17,7 +21,14 @@ const userSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   refreshToken: { type: String, select: false },
   lastLogin: { type: Date },
-  patientProfile: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient' }
+  patientProfile: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient' },
+  // Human-readable handle (e.g. "dr.rajesh.sharma"). Derived pre-save from
+  // `name`; collisions append a digit ("priya.patel2"). Distinct from
+  // `doctorId` (the stable internal UUID) so we never expose that. Used by
+  // the chat assistant and shown in the staff Assistants table. Sparse +
+  // unique across the entire collection. See scripts/backfillPublicIds.js
+  // to seed historical rows.
+  username: { type: String, unique: true, sparse: true, index: true }
 }, { timestamps: true });
 
 userSchema.index({ role: 1 });
@@ -26,6 +37,14 @@ userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 12);
   next();
+});
+
+// Generate a globally unique username slug on first save. Idempotent —
+// skips when already set, so the backfill script can re-run safely.
+userSchema.pre('save', async function () {
+  if (this.username) return;
+  const base = slugifyUsername(this.name);
+  this.username = await nextAvailableUsername(this.constructor, base);
 });
 
 userSchema.methods.comparePassword = async function (candidatePassword) {

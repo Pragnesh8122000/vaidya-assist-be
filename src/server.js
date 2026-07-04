@@ -20,9 +20,7 @@ const doctorRoutes = require('./routes/doctorRoutes');
 const patientAppointmentRoutes = require('./routes/patientAppointmentRoutes');
 const appointmentRoutes = require('./routes/appointmentRoutes');
 const medicineRoutes = require('./routes/medicineRoutes');
-const fileRoutes = require('./routes/fileRoutes');
 const reportRoutes = require('./routes/reportRoutes');
-const chatRoutes = require('./routes/chatRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const prescriptionTemplateRoutes = require('./routes/prescriptionTemplateRoutes');
@@ -87,11 +85,10 @@ const startServer = async () => {
   app.use('/api/patient-portal', patientAppointmentRoutes);
   app.use('/api/appointments', appointmentRoutes);
   app.use('/api/medicines', medicineRoutes);
-  app.use('/api/files', fileRoutes);
   app.use('/api/reports', reportRoutes);
-  app.use('/api/chats', chatRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/notifications', notificationRoutes);
+  app.use('/api/prescription-templates', prescriptionTemplateRoutes);
 
   // Health check
   app.get('/api/health', (req, res) => {

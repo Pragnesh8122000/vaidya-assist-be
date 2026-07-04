@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { fetchDoctors } = require('../utils/doctorQuery');
 const { startOfDayUTC } = require('../utils/date');
+const { buildAliasQuery } = require('../utils/resolveByIdOrCode');
 const {
   SLOT_TAKEN_MESSAGE,
   DEFAULT_SLOT_GRID,
@@ -114,7 +115,12 @@ exports.bookAppointment = async (req, res, next) => {
       };
     }
 
-    // Validate doctor exists and is a doctor
+    // Validate doctor exists and is a doctor. BE-15: we intentionally populate
+    // only `role` (not `role.permissions`) — patient-portal booking verifies the
+    // target user is a doctor via `role.slug` and never performs a permission
+    // check, so deep-populating permissions would add query overhead for no
+    // benefit. Doctor-side controllers that DO check permissions populate the
+    // full permission graph via the auth middleware on `req.user` instead.
     const doctor = await User.findById(doctorId).populate('role');
     if (!doctor || !doctor.role || doctor.role.slug !== 'doctor') {
       return res.status(400).json({ success: false, message: 'Invalid doctor selected.' });
@@ -179,11 +185,34 @@ exports.getPatientAppointments = async (req, res, next) => {
     // Exclude soft-deleted appointments (audit BE-8).
     query.deletedAt = null;
 
-    const appointments = await Appointment.find(query)
-      .populate('doctor', 'name email')
-      .sort({ date: -1 });
+    // BE-12: paginate the patient's appointment list. Defaults (page 1,
+    // limit 50) cap unbounded result sets; clients that ignore pagination
+    // still get a usable first page. `pagination` metadata follows the
+    // backend convention so callers can render controls if needed.
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+    const skip = (page - 1) * limit;
 
-    res.json({ success: true, data: appointments });
+    const [appointments, total] = await Promise.all([
+      Appointment.find(query)
+        .populate('doctor', 'name email')
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(limit),
+      Appointment.countDocuments(query),
+    ]);
+
+    res.json({
+      success: true,
+      data: appointments,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: skip + appointments.length < total,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -196,10 +225,11 @@ exports.getAppointmentDetails = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id)
+    const query = buildAliasQuery(req.params.id, 'displayId', { deletedAt: null });
+    const appointment = await Appointment.findOne(query)
       .populate('doctor', 'name email');
 
-    if (!appointment || appointment.deletedAt) {
+    if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -221,9 +251,10 @@ exports.cancelAppointment = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
-    const appointment = await Appointment.findById(req.params.id);
+    const query = buildAliasQuery(req.params.id, 'displayId', { deletedAt: null });
+    const appointment = await Appointment.findOne(query);
 
-    if (!appointment || appointment.deletedAt) {
+    if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
@@ -538,8 +569,8 @@ exports.getPrescription = async (req, res, next) => {
 };
 
 // Patient-facing download of a prescription file attached to their own record.
-// Mirrors fileController.downloadFile but enforces patient ownership instead of
-// the staff-only `view_files` permission.
+// Enforces patient ownership via req.user.patientProfile and streams the file
+// from the shared /uploads directory.
 exports.downloadPrescriptionFile = async (req, res, next) => {
   try {
     if (!req.user.patientProfile) {

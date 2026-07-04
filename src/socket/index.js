@@ -31,24 +31,6 @@ const setupSocket = (io) => {
     // Join user-specific room
     socket.join(`user:${socket.user._id}`);
 
-    // Chat room management
-    socket.on('chat:join', (chatId) => {
-      socket.join(`chat:${chatId}`);
-    });
-
-    socket.on('chat:leave', (chatId) => {
-      socket.leave(`chat:${chatId}`);
-    });
-
-    // Typing indicator
-    socket.on('chat:typing', ({ chatId, isTyping }) => {
-      socket.to(`chat:${chatId}`).emit('chat:typing', {
-        userId: socket.user._id,
-        name: socket.user.name,
-        isTyping
-      });
-    });
-
     // Get online users
     socket.on('users:getOnline', () => {
       socket.emit('users:online', Array.from(onlineUsers.keys()));

@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const {
+  patientDisplayId,
+  nextAvailableDisplayId,
+} = require('../utils/publicIds');
 
 const medicalNoteSchema = new mongoose.Schema({
   note: { type: String, required: true },
@@ -30,11 +34,25 @@ const patientSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   /** Stable clinic UUID for multi-tenant scoping (matches User.clinicId). */
-  clinicId: { type: String, index: true }
+  clinicId: { type: String, index: true },
+  // Human-readable public code (e.g. PT_202607041430). Generated pre-save
+  // from `createdAt`. Sparse + unique across the entire collection. The BE
+  // controllers accept this code as an alias for `_id` on /:id lookups via
+  // the resolveByIdOrCode helper. See scripts/backfillPublicIds.js to seed
+  // historical rows.
+  displayId: { type: String, unique: true, sparse: true, index: true }
 }, { timestamps: true });
 
 patientSchema.index({ name: 'text', phone: 'text', email: 'text' });
 patientSchema.index({ createdBy: 1 });
 patientSchema.index({ clinicId: 1, createdAt: -1 });
+
+// Generate a globally unique displayId on first save. Idempotent — skips
+// when the field is already set, so the backfill script can re-run safely.
+patientSchema.pre('save', async function () {
+  if (this.displayId) return;
+  const base = patientDisplayId(this.createdAt || new Date());
+  this.displayId = await nextAvailableDisplayId(this.constructor, base);
+});
 
 module.exports = mongoose.model('Patient', patientSchema);

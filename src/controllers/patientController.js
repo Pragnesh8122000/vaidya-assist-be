@@ -1,4 +1,5 @@
 const Patient = require('../models/Patient');
+const { buildAliasQuery } = require('../utils/resolveByIdOrCode');
 
 function clinicScope(req) {
   return req.clinicId ? { clinicId: req.clinicId } : {};
@@ -40,7 +41,7 @@ exports.getPatients = async (req, res, next) => {
 // Get single patient
 exports.getPatient = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, ...clinicScope(req) };
+    const query = buildAliasQuery(req.params.id, 'displayId', clinicScope(req));
     const patient = await Patient.findOne(query)
       .populate('createdBy', 'name')
       .populate('medicalNotes.createdBy', 'name');
@@ -77,7 +78,7 @@ exports.updatePatient = async (req, res, next) => {
   try {
     // Preserve clinic ownership on updates; ignore any clinicId/createdBy supplied in body.
     const { clinicId: _ignored, createdBy: _ignored2, ...safeBody } = req.body;
-    const query = { _id: req.params.id, ...clinicScope(req) };
+    const query = buildAliasQuery(req.params.id, 'displayId', clinicScope(req));
     const patient = await Patient.findOneAndUpdate(query, safeBody, { new: true, runValidators: true });
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
@@ -91,7 +92,7 @@ exports.updatePatient = async (req, res, next) => {
 // Delete patient
 exports.deletePatient = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, ...clinicScope(req) };
+    const query = buildAliasQuery(req.params.id, 'displayId', clinicScope(req));
     const patient = await Patient.findOneAndDelete(query);
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
@@ -105,7 +106,7 @@ exports.deletePatient = async (req, res, next) => {
 // Add medical note
 exports.addMedicalNote = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, ...clinicScope(req) };
+    const query = buildAliasQuery(req.params.id, 'displayId', clinicScope(req));
     const patient = await Patient.findOne(query);
     if (!patient) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });

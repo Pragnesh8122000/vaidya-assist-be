@@ -204,8 +204,10 @@ describe('appointmentController create/update/delete', () => {
   });
 
   it('updateAppointment strips protected fields and scopes by clinic', async () => {
-    const existing = { _id: 'apt-id', status: 'Waiting', doctor: 'doc-id', date: new Date(futureDate()), time: '10:00' };
-    const updated = { _id: 'apt-id', status: 'Completed' };
+    // 24-char hex — exercises BOTH branches of buildAliasQuery.
+    const aptId = '507f1f77bcf86cd799439011';
+    const existing = { _id: aptId, status: 'Waiting', doctor: 'doc-id', date: new Date(futureDate()), time: '10:00' };
+    const updated = { _id: aptId, status: 'Completed' };
     // BE-7: updateAppointment now pre-fetches the existing record for transition
     // + reschedule re-validation before calling findOneAndUpdate.
     Appointment.findOne.mockReturnValue({
@@ -217,7 +219,7 @@ describe('appointmentController create/update/delete', () => {
     Appointment.findOneAndUpdate.mockReturnValue(createPopulateChain(updated, 2));
 
     const req = {
-      params: { id: 'apt-id' },
+      params: { id: aptId },
       body: { status: 'Completed', doctor: 'other-doc', patient: 'other-patient', clinicId: 'other-clinic' },
       user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
       clinicId: 'clinic-uuid',
@@ -229,8 +231,13 @@ describe('appointmentController create/update/delete', () => {
     await updateAppointment(req, res, next);
 
     expect(Appointment.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'apt-id', clinicId: 'clinic-uuid', deletedAt: null },
-      { status: 'Completed' },
+      { $or: [{ _id: aptId }, { displayId: aptId }], clinicId: 'clinic-uuid', deletedAt: null },
+      expect.objectContaining({
+        status: 'Completed',
+        // BE-16: status change stamps the audit trail with the actor + timestamp.
+        lastStatusChangedBy: 'doc-id',
+        lastStatusChangedAt: expect.any(Date),
+      }),
       { new: true, runValidators: true },
     );
     expect(res.json).toHaveBeenCalledWith({ success: true, data: updated });
@@ -241,8 +248,9 @@ describe('appointmentController create/update/delete', () => {
     // findOneAndDelete.
     Appointment.findOne.mockResolvedValue(null);
 
+    const missingId = '507f1f77bcf86cd799439099';
     const req = {
-      params: { id: 'missing-id' },
+      params: { id: missingId },
       user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
       clinicId: 'clinic-uuid',
       app: createApp(),
@@ -252,16 +260,17 @@ describe('appointmentController create/update/delete', () => {
 
     await deleteAppointment(req, res, next);
 
-    expect(Appointment.findOne).toHaveBeenCalledWith({ _id: 'missing-id', clinicId: 'clinic-uuid', deletedAt: null });
+    expect(Appointment.findOne).toHaveBeenCalledWith({ $or: [{ _id: missingId }, { displayId: missingId }], clinicId: 'clinic-uuid', deletedAt: null });
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
   it('getAppointment scopes by clinic', async () => {
-    const appointment = { _id: 'apt-id' };
+    const aptId = '507f1f77bcf86cd799439011';
+    const appointment = { _id: aptId };
     Appointment.findOne.mockReturnValue(createPopulateChain(appointment, 3));
 
     const req = {
-      params: { id: 'apt-id' },
+      params: { id: aptId },
       user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
       clinicId: 'clinic-uuid',
     };
@@ -270,7 +279,7 @@ describe('appointmentController create/update/delete', () => {
 
     await getAppointment(req, res, next);
 
-    expect(Appointment.findOne).toHaveBeenCalledWith({ _id: 'apt-id', clinicId: 'clinic-uuid', deletedAt: null });
+    expect(Appointment.findOne).toHaveBeenCalledWith({ $or: [{ _id: aptId }, { displayId: aptId }], clinicId: 'clinic-uuid', deletedAt: null });
     expect(res.json).toHaveBeenCalledWith({ success: true, data: appointment });
   });
 });

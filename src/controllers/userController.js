@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Role = require('../models/Role');
+const { buildAliasQuery } = require('../utils/resolveByIdOrCode');
 
 // Get all users (assistants/staff)
 exports.getUsers = async (req, res, next) => {
@@ -66,7 +67,8 @@ exports.updateUser = async (req, res, next) => {
     if (role) update.role = role;
     if (isActive !== undefined) update.isActive = isActive;
 
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).populate('role');
+    const query = buildAliasQuery(req.params.id, 'username');
+    const user = await User.findOneAndUpdate(query, update, { new: true }).populate('role');
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
@@ -80,7 +82,8 @@ exports.updateUser = async (req, res, next) => {
 // Delete user
 exports.deleteUser = async (req, res, next) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
+    const query = buildAliasQuery(req.params.id, 'username');
+    const user = await User.findOneAndDelete(query);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }

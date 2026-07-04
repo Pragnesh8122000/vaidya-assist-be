@@ -2,16 +2,26 @@ const {
   getDoctors,
   bookAppointment,
   getPatientAppointments,
+  getAppointmentDetails,
+  cancelAppointment,
+  rescheduleAppointment,
 } = require('../patientAppointmentController');
 const User = require('../../models/User');
 const Patient = require('../../models/Patient');
 const Appointment = require('../../models/Appointment');
 const { fetchDoctors } = require('../../utils/doctorQuery');
+const { isSlotTaken, SLOT_TAKEN_MESSAGE } = require('../../utils/appointmentSlots');
 
 jest.mock('../../models/User');
 jest.mock('../../models/Patient');
 jest.mock('../../models/Appointment');
 jest.mock('../../utils/doctorQuery');
+jest.mock('../../utils/appointmentSlots', () => ({
+  SLOT_TAKEN_MESSAGE: 'This time slot is already booked.',
+  DEFAULT_SLOT_GRID: [],
+  isSlotTaken: jest.fn(),
+  getBookedTimes: jest.fn(),
+}));
 
 // A future date (today + 7 days, YYYY-MM-DD) used wherever a valid upcoming
 // booking date is needed. Hardcoded dates rot as the clock advances and start
@@ -29,9 +39,18 @@ function createRes() {
   };
 }
 
-function createQueryChain(result, { populateCalls = 1, hasSort = false } = {}) {
+function createQueryChain(result, { populateCalls = 1, hasSort = false, hasSkipLimit = false } = {}) {
   let count = 0;
-  const sortChain = { sort: jest.fn().mockResolvedValue(result) };
+  // BE-12: the patient-appointments query is now
+  //   find().populate().sort().skip().limit()
+  // Each chained call returns the next link; the terminal call resolves.
+  const limitChain = { limit: jest.fn().mockResolvedValue(result) };
+  const skipChain = {
+    skip: jest.fn().mockImplementation(() => (hasSkipLimit ? limitChain : Promise.resolve(result))),
+  };
+  const sortChain = {
+    sort: jest.fn().mockImplementation(() => (hasSkipLimit ? skipChain : Promise.resolve(result))),
+  };
   const chain = {
     populate: jest.fn().mockImplementation(() => {
       count += 1;
@@ -141,7 +160,11 @@ describe('patientAppointmentController', () => {
 
   it('getPatientAppointments returns patient appointments', async () => {
     const appointments = [{ _id: 'apt-1' }];
-    Appointment.find.mockReturnValue(createQueryChain(appointments, { hasSort: true }));
+    // BE-12: pagination now chains .sort().skip().limit() and calls countDocuments.
+    Appointment.find.mockReturnValue(
+      createQueryChain(appointments, { hasSort: true, hasSkipLimit: true }),
+    );
+    Appointment.countDocuments.mockResolvedValue(1);
 
     const req = {
       user: { _id: 'pat-id', patientProfile: 'pat-profile-id' },
@@ -153,6 +176,44 @@ describe('patientAppointmentController', () => {
     await getPatientAppointments(req, res, next);
 
     expect(Appointment.find).toHaveBeenCalledWith({ patient: 'pat-profile-id', deletedAt: null });
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: appointments });
+    expect(Appointment.countDocuments).toHaveBeenCalledWith({ patient: 'pat-profile-id', deletedAt: null });
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: appointments,
+      pagination: {
+        page: 1,
+        limit: 50,
+        total: 1,
+        totalPages: 1,
+        hasNextPage: false,
+      },
+    });
+  });
+
+  it('getPatientAppointments honours page/limit query params (BE-12)', async () => {
+    const appointments = [{ _id: 'apt-2' }];
+    Appointment.find.mockReturnValue(
+      createQueryChain(appointments, { hasSort: true, hasSkipLimit: true }),
+    );
+    Appointment.countDocuments.mockResolvedValue(25);
+
+    const req = {
+      user: { _id: 'pat-id', patientProfile: 'pat-profile-id' },
+      query: { page: '2', limit: '10' },
+    };
+    const res = createRes();
+    const next = jest.fn();
+
+    await getPatientAppointments(req, res, next);
+
+    expect(Appointment.find).toHaveBeenCalledWith({ patient: 'pat-profile-id', deletedAt: null });
+    expect(Appointment.countDocuments).toHaveBeenCalledWith({ patient: 'pat-profile-id', deletedAt: null });
+    // page 2, limit 10, 25 total → 3 pages, no next page after page 2... actually
+    // page 2 of 3 with limit 10 has a page 3, so hasNextPage is true.
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: appointments,
+      pagination: expect.objectContaining({ page: 2, limit: 10, total: 25, totalPages: 3, hasNextPage: true }),
+    }));
   });
 });

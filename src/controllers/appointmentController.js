@@ -2,6 +2,7 @@ const Appointment = require('../models/Appointment');
 const { validateStatusTransition } = require('../models/Appointment');
 const { SLOT_TAKEN_MESSAGE } = require('../utils/appointmentSlots');
 const { startOfDayUTC, endOfDayUTC, getTodayRangeUTC } = require('../utils/date');
+const { buildAliasQuery } = require('../utils/resolveByIdOrCode');
 
 // Get all appointments
 exports.getAppointments = async (req, res, next) => {
@@ -124,8 +125,9 @@ exports.getCalendarAppointments = async (req, res, next) => {
 // Get single appointment
 exports.getAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, deletedAt: null };
-    if (req.clinicId) query.clinicId = req.clinicId;
+    const extra = { deletedAt: null };
+    if (req.clinicId) extra.clinicId = req.clinicId;
+    const query = buildAliasQuery(req.params.id, 'displayId', extra);
 
     const appointment = await Appointment.findOne(query)
       .populate('patient')
@@ -211,8 +213,9 @@ exports.createAppointment = async (req, res, next) => {
 // Update appointment
 exports.updateAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, deletedAt: null };
-    if (req.clinicId) query.clinicId = req.clinicId;
+    const extra = { deletedAt: null };
+    if (req.clinicId) extra.clinicId = req.clinicId;
+    const query = buildAliasQuery(req.params.id, 'displayId', extra);
 
     // Prevent mass-assignment of identity/scoping fields.
     const allowedUpdates = { ...req.body };
@@ -222,6 +225,9 @@ exports.updateAppointment = async (req, res, next) => {
     delete allowedUpdates.clinicId;
     delete allowedUpdates.clinic;
     delete allowedUpdates.createdBy;
+    // BE-16: audit fields are server-controlled, never client-set.
+    delete allowedUpdates.lastStatusChangedBy;
+    delete allowedUpdates.lastStatusChangedAt;
 
     if (allowedUpdates.date) {
       allowedUpdates.date = startOfDayUTC(allowedUpdates.date);
@@ -243,6 +249,13 @@ exports.updateAppointment = async (req, res, next) => {
           message: `Cannot change appointment status from '${existing.status}' to '${allowedUpdates.status}'.`,
         });
       }
+      // BE-16: stamp the audit trail for the actor changing the status.
+      allowedUpdates.lastStatusChangedBy = req.user ? req.user._id : undefined;
+      allowedUpdates.lastStatusChangedAt = new Date();
+    } else if (allowedUpdates.status && allowedUpdates.status === existing.status) {
+      // Status not actually changing — don't touch the audit trail.
+      delete allowedUpdates.lastStatusChangedBy;
+      delete allowedUpdates.lastStatusChangedAt;
     }
 
     // BE-7: when date or time changes, re-validate past-date + slot conflict.
@@ -302,8 +315,9 @@ exports.updateAppointment = async (req, res, next) => {
 // audit #23). Replaces any existing prescription on that visit.
 exports.setPrescription = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, deletedAt: null };
-    if (req.clinicId) query.clinicId = req.clinicId;
+    const extra = { deletedAt: null };
+    if (req.clinicId) extra.clinicId = req.clinicId;
+    const query = buildAliasQuery(req.params.id, 'displayId', extra);
 
     const appointment = await Appointment.findOne(query);
     if (!appointment) {
@@ -356,8 +370,9 @@ exports.setPrescription = async (req, res, next) => {
 // filter `deletedAt: null` so the row stops appearing.
 exports.deleteAppointment = async (req, res, next) => {
   try {
-    const query = { _id: req.params.id, deletedAt: null };
-    if (req.clinicId) query.clinicId = req.clinicId;
+    const extra = { deletedAt: null };
+    if (req.clinicId) extra.clinicId = req.clinicId;
+    const query = buildAliasQuery(req.params.id, 'displayId', extra);
 
     const appointment = await Appointment.findOne(query);
     if (!appointment) {
