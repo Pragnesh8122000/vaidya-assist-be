@@ -1,8 +1,50 @@
 const Appointment = require('../models/Appointment');
+const Patient = require('../models/Patient');
 const { validateStatusTransition } = require('../models/Appointment');
 const { SLOT_TAKEN_MESSAGE } = require('../utils/appointmentSlots');
 const { startOfDayUTC, endOfDayUTC, getTodayRangeUTC } = require('../utils/date');
 const { buildAliasQuery } = require('../utils/resolveByIdOrCode');
+
+// 4C-1: appointment status enum allow-list — unknown / object values are
+// ignored rather than passed into the Mongoose query.
+const APPOINTMENT_STATUS_VALUES = ['Waiting', 'Confirmed', 'In Consultation', 'Completed', 'Cancelled'];
+
+// CR-3: socket payload sanitization helpers. Strip PHI that the recipient
+// should not see — patient.phone for doctor recipients, doctor.email for
+// patient recipients. Accepts a Mongoose doc or POJO and returns a plain
+// object so the broadcast payload is safe.
+function toPlain(appt) {
+  return appt && appt.toObject ? appt.toObject() : { ...appt };
+}
+function stripPatientPhone(appt) {
+  const obj = toPlain(appt);
+  if (obj.patient && typeof obj.patient === 'object') {
+    const { phone, _id, ...rest } = obj.patient;
+    obj.patient = { _id, ...rest };
+    delete obj.patient.phone;
+  }
+  return obj;
+}
+function stripDoctorEmail(appt) {
+  const obj = toPlain(appt);
+  if (obj.doctor && typeof obj.doctor === 'object') {
+    const { email, _id, ...rest } = obj.doctor;
+    obj.doctor = { _id, ...rest };
+    delete obj.doctor.email;
+  }
+  return obj;
+}
+
+// CR-3: resolve the patient's portal userId for room-targeted emits. The
+// appointment populate only carries patient name/phone, so a single tiny
+// lookup is needed to read Patient.user. Returns undefined when the patient
+// has no linked portal user (e.g. staff-created walk-in patient).
+async function getPatientUserId(patientRef) {
+  if (!patientRef) return undefined;
+  const pid = patientRef._id ? patientRef._id : patientRef;
+  const patientDoc = await Patient.findById(pid).select('user');
+  return patientDoc ? patientDoc.user : undefined;
+}
 
 // Get all appointments
 exports.getAppointments = async (req, res, next) => {
@@ -16,7 +58,10 @@ exports.getAppointments = async (req, res, next) => {
     if (startDate && endDate) {
       query.date = { $gte: startOfDayUTC(startDate), $lte: endOfDayUTC(endDate) };
     }
-    if (status) query.status = status;
+    if (status) {
+      const s = String(status);
+      if (APPOINTMENT_STATUS_VALUES.includes(s)) query.status = s;
+    }
     if (doctor) query.doctor = doctor;
     if (patient) query.patient = patient;
 
@@ -195,10 +240,19 @@ exports.createAppointment = async (req, res, next) => {
       .populate('doctor', 'name')
       .populate('createdBy', 'name');
 
-    // Emit socket event
+    // CR-3: emit only to the owning doctor's and owning patient's user rooms.
+    // doctorId is the appointment's doctor (populated); patientUserId is
+    // resolved via a one-shot Patient.user lookup. PHI sanitized per recipient
+    // (patient.phone hidden from doctor, doctor.email hidden from patient).
+    // Never io.emit globally across clinics/users.
     const io = req.app.get('io');
     if (io) {
-      io.emit('appointment:created', populated);
+      const doctorId = populated.doctor && populated.doctor._id ? populated.doctor._id : populated.doctor;
+      const patientUserId = await getPatientUserId(populated.patient);
+      io.to(`user:${doctorId}`).emit('appointment:created', stripPatientPhone(populated));
+      if (patientUserId) {
+        io.to(`user:${patientUserId}`).emit('appointment:created', stripDoctorEmail(populated));
+      }
     }
 
     res.status(201).json({ success: true, data: populated });
@@ -293,12 +347,27 @@ exports.updateAppointment = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
-    // Emit socket event for status update
+    // CR-3: emit only to the owning doctor's and owning patient's user rooms.
+    // doctorId is the appointment's doctor (req.user._id on this doctor-side
+    // route). The patient's portal userId is resolved via a one-shot lookup of
+    // Patient.user (not present in the populate). PHI is sanitized per
+    // recipient — patient.phone hidden from the doctor, doctor.email hidden
+    // from the patient. Never io.emit globally across clinics/users.
     const io = req.app.get('io');
     if (io) {
-      io.emit('appointment:updated', appointment);
+      const doctorId = appointment.doctor && appointment.doctor._id ? appointment.doctor._id : appointment.doctor;
+      const patientUserId = await getPatientUserId(appointment.patient);
+      const doctorTarget = `user:${doctorId}`;
+      io.to(doctorTarget).emit('appointment:updated', stripPatientPhone(appointment));
+      if (patientUserId) {
+        io.to(`user:${patientUserId}`).emit('appointment:updated', stripDoctorEmail(appointment));
+      }
       if (req.body.status) {
-        io.emit('appointment:statusUpdate', { id: appointment._id, status: req.body.status, appointment });
+        const statusPayload = { id: appointment._id, status: req.body.status, appointment };
+        io.to(doctorTarget).emit('appointment:statusUpdate', { ...statusPayload, appointment: stripPatientPhone(appointment) });
+        if (patientUserId) {
+          io.to(`user:${patientUserId}`).emit('appointment:statusUpdate', { ...statusPayload, appointment: stripDoctorEmail(appointment) });
+        }
       }
     }
 
@@ -354,9 +423,15 @@ exports.setPrescription = async (req, res, next) => {
       .populate('doctor', 'name email')
       .populate('prescription.createdBy', 'name');
 
+    // CR-3: targeted emit to owning doctor + owning patient's user room only.
     const io = req.app.get('io');
     if (io) {
-      io.emit('prescription:updated', populated);
+      const doctorId = populated.doctor && populated.doctor._id ? populated.doctor._id : populated.doctor;
+      const patientUserId = await getPatientUserId(populated.patient);
+      io.to(`user:${doctorId}`).emit('prescription:updated', stripPatientPhone(populated));
+      if (patientUserId) {
+        io.to(`user:${patientUserId}`).emit('prescription:updated', stripDoctorEmail(populated));
+      }
     }
 
     res.json({ success: true, data: populated });
@@ -379,12 +454,24 @@ exports.deleteAppointment = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
+    // CR-3: resolve room targets BEFORE the soft-delete so emits can be targeted
+    // after. doctorId is the appointment's doctor (ObjectId on the doc — not
+    // populated here, but the raw id is what the room key needs). patientUserId
+    // is resolved via a one-shot Patient.user lookup. The deleted payload is
+    // just the id (no PHI), so no sanitization is required — but it must never
+    // be broadcast globally across clinics/users.
+    const doctorId = appointment.doctor;
+    const patientUserId = await getPatientUserId(appointment.patient);
+
     appointment.deletedAt = new Date();
     await appointment.save();
 
     const io = req.app.get('io');
     if (io) {
-      io.emit('appointment:deleted', req.params.id);
+      io.to(`user:${doctorId}`).emit('appointment:deleted', req.params.id);
+      if (patientUserId) {
+        io.to(`user:${patientUserId}`).emit('appointment:deleted', req.params.id);
+      }
     }
 
     res.json({ success: true, message: 'Appointment deleted.' });

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { auth, checkPermission } = require('../middleware/auth');
-const { portalWriteLimiter } = require('../middleware/rateLimit');
+const { portalWriteLimiter, portalReadLimiter } = require('../middleware/rateLimit');
 const patientController = require('../controllers/patientAppointmentController');
 
 // All patient routes require authentication
@@ -21,8 +21,8 @@ router.delete('/me/dependents/:id', checkPermission('update_own_profile'), patie
 // Doctor search
 router.get('/doctors', checkPermission('view_own_appointments'), patientController.getDoctors);
 
-// Doctor availability
-router.get('/doctors/:doctorId/slots', checkPermission('view_own_appointments'), patientController.getAvailableSlots);
+// Doctor availability — SEC-12: rate-limit the polling-heavy slot endpoint.
+router.get('/doctors/:doctorId/slots', portalReadLimiter, checkPermission('view_own_appointments'), patientController.getAvailableSlots);
 
 // Appointment routes
 router.post('/appointments', portalWriteLimiter, checkPermission('book_appointment'), patientController.bookAppointment);

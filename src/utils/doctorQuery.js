@@ -1,6 +1,10 @@
 const User = require('../models/User');
 const Role = require('../models/Role');
 
+// 4C-1: escape regex metacharacters in raw user search input before passing
+// to $regex, to prevent regex injection / DoS.
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Shared helper to fetch doctor users for the clinic.
  *
@@ -11,9 +15,12 @@ const Role = require('../models/Role');
  * @param {number} [options.page=1]
  * @param {number} [options.limit=50]
  * @param {string} [options.search]
+ * @param {string} [options.clinicId] - When provided, scope results to this
+ *   clinic only (multi-tenant isolation, audit CR-1). Omit to return doctors
+ *   across all clinics (used for super-admin doctor callers).
  * @returns {Promise<{data: Object[], count: number, pagination: Object}>}
  */
-async function fetchDoctors({ page = 1, limit = 50, search = '' } = {}) {
+async function fetchDoctors({ page = 1, limit = 50, search = '', clinicId } = {}) {
   const doctorRole = await Role.findOne({ slug: 'doctor' });
 
   const query = {};
@@ -21,8 +28,15 @@ async function fetchDoctors({ page = 1, limit = 50, search = '' } = {}) {
     query.role = doctorRole._id;
   }
 
+  // CR-1: scope by clinic when a clinicId is supplied so cross-clinic doctors
+  // are not exposed. When omitted (super-admin doctor caller), the query stays
+  // global and the previous behavior is preserved.
+  if (clinicId) {
+    query.clinicId = clinicId;
+  }
+
   if (search && search.trim().length > 0) {
-    const term = search.trim();
+    const term = escapeRegex(search.trim());
     query.$or = [
       { name: { $regex: term, $options: 'i' } },
       { email: { $regex: term, $options: 'i' } },

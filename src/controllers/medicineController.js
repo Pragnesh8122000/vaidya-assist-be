@@ -1,5 +1,32 @@
 const Medicine = require('../models/Medicine');
 
+// 4C-1: escape regex metacharacters in raw user search input before passing
+// to $regex, to prevent regex injection / DoS.
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// SEC-7: explicit allow-list of medicine fields a caller may set on create /
+// update. Server-controlled fields (clinicId, createdBy, _id) are excluded.
+const ALLOWED_MEDICINE_FIELDS = [
+  'name',
+  'genericName',
+  'stock',
+  'batchNumber',
+  'expiryDate',
+  'supplier',
+  'price',
+  'category',
+  'description',
+  'lowStockThreshold',
+];
+
+function pickAllowed(body, allowlist) {
+  const out = {};
+  for (const k of allowlist) {
+    if (k in body) out[k] = body[k];
+  }
+  return out;
+}
+
 // Get all medicines
 exports.getMedicines = async (req, res, next) => {
   try {
@@ -7,12 +34,13 @@ exports.getMedicines = async (req, res, next) => {
     const query = {};
 
     if (search) {
+      const term = escapeRegex(search);
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { genericName: { $regex: search, $options: 'i' } }
+        { name: { $regex: term, $options: 'i' } },
+        { genericName: { $regex: term, $options: 'i' } }
       ];
     }
-    if (category) query.category = category;
+    if (category) query.category = String(category);
     if (lowStock === 'true') {
       query.$expr = { $lte: ['$stock', '$lowStockThreshold'] };
     }
@@ -67,11 +95,13 @@ exports.createMedicine = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Medicine name and stock are required.' });
     }
 
-    const medicine = await Medicine.create({
-      ...req.body,
-      createdBy: req.user._id,
-      clinicId: req.user.clinicId || req.clinicId,
-    });
+    // SEC-7: build the payload from an allow-list only, then layer the
+    // server-controlled fields on top so a caller cannot set clinicId /
+    // createdBy via the request body.
+    const payload = pickAllowed(req.body, ALLOWED_MEDICINE_FIELDS);
+    payload.createdBy = req.user._id;
+    payload.clinicId = req.user.clinicId || req.clinicId;
+    const medicine = await Medicine.create(payload);
     res.status(201).json({ success: true, data: medicine });
   } catch (error) {
     next(error);
@@ -81,8 +111,9 @@ exports.createMedicine = async (req, res, next) => {
 // Update medicine
 exports.updateMedicine = async (req, res, next) => {
   try {
-    // Preserve clinic ownership on updates; ignore any clinicId/createdBy supplied in body.
-    const { clinicId: _ignored, createdBy: _ignored2, ...safeBody } = req.body;
+    // SEC-7: allow-list the update to prevent mass assignment of clinicId /
+    // createdBy / _id.
+    const safeBody = pickAllowed(req.body, ALLOWED_MEDICINE_FIELDS);
     const query = { _id: req.params.id, ...clinicScope(req) };
     const medicine = await Medicine.findOneAndUpdate(query, safeBody, { new: true, runValidators: true });
     if (!medicine) {

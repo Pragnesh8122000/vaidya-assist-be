@@ -22,7 +22,9 @@ router.post('/login', authLimiter, [
   body('password').notEmpty().withMessage('Password is required'),
 ], validate, login);
 
-router.post('/refresh-token', refreshToken);
+// SEC-12: rate-limit refresh-token to blunt token-grinding / brute-force
+// attempts against the refresh endpoint.
+router.post('/refresh-token', authLimiter, refreshToken);
 router.get('/me', auth, getMe);
 router.post('/logout', auth, logout);
 

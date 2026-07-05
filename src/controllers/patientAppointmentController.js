@@ -14,6 +14,42 @@ const {
   getBookedTimes,
 } = require('../utils/appointmentSlots');
 
+// CR-3: socket payload sanitization. Strip PHI fields that the recipient should
+// not see — patient.phone for doctor recipients, doctor.email for patient
+// recipients. Accepts a Mongoose doc or POJO and returns a plain object so the
+// sanitized payload is safe to broadcast.
+function sanitizeAppointmentPayload(appt) {
+  const obj = appt && appt.toObject ? appt.toObject() : { ...appt };
+  return obj;
+}
+function stripPatientPhone(appt) {
+  const obj = sanitizeAppointmentPayload(appt);
+  if (obj.patient && typeof obj.patient === 'object') {
+    const { phone, _id, ...rest } = obj.patient;
+    obj.patient = { _id, ...rest };
+    delete obj.patient.phone;
+  }
+  return obj;
+}
+function stripDoctorEmail(appt) {
+  const obj = sanitizeAppointmentPayload(appt);
+  if (obj.doctor && typeof obj.doctor === 'object') {
+    const { email, _id, ...rest } = obj.doctor;
+    obj.doctor = { _id, ...rest };
+    delete obj.doctor.email;
+  }
+  return obj;
+}
+
+// 4C-1: allow-list for the patient-facing profile update (mass-assignment
+// guard). Server-controlled / identity fields (clinicId, user, createdBy,
+// dependents, _id) are intentionally excluded.
+const ALLOWED_PROFILE_FIELDS = ['name', 'phone', 'email', 'address', 'bloodGroup', 'dob', 'gender'];
+
+// 4C-1: appointment status enum allow-list — unknown / object values are
+// ignored rather than passed into the Mongoose query.
+const APPOINTMENT_STATUS_VALUES = ['Waiting', 'Confirmed', 'In Consultation', 'Completed', 'Cancelled'];
+
 // Get authenticated patient profile
 exports.getPatientProfile = async (req, res, next) => {
   try {
@@ -39,9 +75,16 @@ exports.updatePatientProfile = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Patient profile not found.' });
     }
 
+    // 4C-1: build the update from an allow-list only, to prevent mass
+    // assignment of clinicId / user / createdBy / dependents / _id.
+    const update = {};
+    for (const k of ALLOWED_PROFILE_FIELDS) {
+      if (k in req.body) update[k] = req.body[k];
+    }
+
     const patient = await Patient.findByIdAndUpdate(
       req.user.patientProfile,
-      req.body,
+      update,
       { new: true, runValidators: true }
     );
 
@@ -56,10 +99,29 @@ exports.updatePatientProfile = async (req, res, next) => {
 };
 
 // Get list of doctors available for booking
+// CR-1: scope to the patient's own clinic so a patient cannot see doctors from
+// other clinics. The patient's clinicId lives on their Patient profile (the
+// User.clinicId for patients is a random uuid default, not a real clinic), so
+// we read it from there. Self-registered patients without a clinicId keep the
+// previous permissive behavior (see bookAppointment clinic-consistency check).
 exports.getDoctors = async (req, res, next) => {
   try {
     const { search } = req.query;
-    const result = await fetchDoctors({ search });
+    // CR-1: scope to the patient's own clinic so a patient cannot see doctors
+    // from other clinics. The patient's clinicId lives on their Patient profile
+    // (the User.clinicId for patients is a random uuid default, not a real
+    // clinic), so we read it from there. Self-registered patients without a
+    // clinicId keep the previous permissive behavior (no clinicId in the
+    // fetchDoctors call). The guard also keeps the call signature identical to
+    // the pre-fix behavior when no patient profile is available.
+    let clinicId;
+    if (req.user && req.user.patientProfile) {
+      const patient = await Patient.findById(req.user.patientProfile).select('clinicId');
+      clinicId = patient && patient.clinicId ? patient.clinicId : undefined;
+    }
+    const options = { search };
+    if (clinicId) options.clinicId = clinicId;
+    const result = await fetchDoctors(options);
     res.json({ success: true, ...result });
   } catch (error) {
     next(error);
@@ -126,12 +188,13 @@ exports.bookAppointment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid doctor selected.' });
     }
 
-    // BE-4: validate clinic consistency. Lenient — only reject when BOTH the
-    // patient and the doctor have a clinicId AND they differ. Self-registered
-    // patients often have no clinicId set (the registration form does not always
-    // send one), so strict equality would block them from booking. Audit BE-4.
-    if (patient.clinicId && doctor.clinicId && patient.clinicId !== doctor.clinicId) {
-      return res.status(403).json({ success: false, message: 'Doctor and patient belong to different clinics.' });
+    // CR-1: validate clinic consistency. When the patient HAS a clinicId, the
+    // doctor MUST be in the same clinic — reject with 409 otherwise. Patients
+    // without a clinicId (self-registered, registration form did not send one)
+    // keep the previous permissive behavior so they can still book; the
+    // appointment is stamped with the doctor's clinicId below regardless.
+    if (patient.clinicId && (!doctor.clinicId || doctor.clinicId !== patient.clinicId)) {
+      return res.status(409).json({ success: false, message: 'Doctor not available in your clinic.' });
     }
 
     // Scope the conflict check to the same UTC day so it matches stored dates.
@@ -179,7 +242,8 @@ exports.getPatientAppointments = async (req, res, next) => {
 
     // Filter by status if provided (e.g., ?status=Waiting)
     if (req.query.status) {
-      query.status = req.query.status;
+      const s = String(req.query.status);
+      if (APPOINTMENT_STATUS_VALUES.includes(s)) query.status = s;
     }
 
     // Exclude soft-deleted appointments (audit BE-8).
@@ -279,14 +343,27 @@ exports.cancelAppointment = async (req, res, next) => {
       .populate('doctor', 'name email')
       .populate('patient', 'name phone');
 
-    // Emit socket event for real-time updates
+    // CR-3: emit only to the owning doctor and the owning patient's user room.
+    // The actor on this patient-portal route IS the patient, so req.user._id is
+    // the patient's userId. patient.phone is stripped for the doctor recipient;
+    // doctor.email is stripped for the patient recipient. Never broadcast PHI
+    // globally across clinics/users.
     const io = req.app.get('io');
     if (io) {
-      io.emit('appointment:statusUpdate', {
+      const doctorId = populated.doctor && populated.doctor._id ? populated.doctor._id : populated.doctor;
+      const patientUserId = req.user._id;
+      const doctorPayload = {
         id: appointment._id,
         status: 'Cancelled',
-        appointment: populated,
-      });
+        appointment: stripPatientPhone(populated),
+      };
+      const patientPayload = {
+        id: appointment._id,
+        status: 'Cancelled',
+        appointment: stripDoctorEmail(populated),
+      };
+      io.to(`user:${doctorId}`).emit('appointment:statusUpdate', doctorPayload);
+      io.to(`user:${patientUserId}`).emit('appointment:statusUpdate', patientPayload);
     }
 
     res.json({ success: true, data: populated });
@@ -361,10 +438,15 @@ exports.rescheduleAppointment = async (req, res, next) => {
       .populate('doctor', 'name email')
       .populate('patient', 'name phone');
 
-    // Emit socket event for real-time updates
+    // CR-3: targeted emit to owning doctor + owning patient's user room only.
+    // The actor here is the patient (req.user._id). PHI is sanitized per
+    // recipient (patient.phone hidden from doctor, doctor.email from patient).
     const io = req.app.get('io');
     if (io) {
-      io.emit('appointment:updated', populated);
+      const doctorId = populated.doctor && populated.doctor._id ? populated.doctor._id : populated.doctor;
+      const patientUserId = req.user._id;
+      io.to(`user:${doctorId}`).emit('appointment:updated', stripPatientPhone(populated));
+      io.to(`user:${patientUserId}`).emit('appointment:updated', stripDoctorEmail(populated));
     }
 
     res.json({ success: true, data: populated });

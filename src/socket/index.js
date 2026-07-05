@@ -26,10 +26,21 @@ const setupSocket = (io) => {
 
     // Track online status
     onlineUsers.set(socket.user._id.toString(), socket.id);
-    io.emit('user:online', { userId: socket.user._id, name: socket.user.name });
 
-    // Join user-specific room
+    // CR-3: join user-specific and clinic-specific rooms so emits can be
+    // targeted instead of broadcast globally. The clinic room lets presence
+    // and per-clinic events stay within a clinic; never broadcast presence
+    // across clinics.
+    const clinicId = socket.user.clinicId;
     socket.join(`user:${socket.user._id}`);
+    if (clinicId) {
+      socket.join(`clinic:${clinicId}`);
+      io.to(`clinic:${clinicId}`).emit('user:online', { userId: socket.user._id, name: socket.user.name });
+    } else {
+      // No clinic (should not happen — User.clinicId has a uuid default): fall
+      // back to the user's own room rather than a global broadcast.
+      socket.emit('user:online', { userId: socket.user._id, name: socket.user.name });
+    }
 
     // Get online users
     socket.on('users:getOnline', () => {
@@ -40,7 +51,10 @@ const setupSocket = (io) => {
     socket.on('disconnect', () => {
       console.log(`User disconnected: ${socket.user.name}`);
       onlineUsers.delete(socket.user._id.toString());
-      io.emit('user:offline', { userId: socket.user._id });
+      // CR-3: scope offline presence to the same clinic room, never global.
+      if (clinicId) {
+        io.to(`clinic:${clinicId}`).emit('user:offline', { userId: socket.user._id });
+      }
     });
   });
 

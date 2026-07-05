@@ -4,6 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const morgan = require('morgan');
+const helmet = require('helmet');
 const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 
@@ -34,6 +35,13 @@ const startServer = async () => {
   
 
   const app = express();
+  // 4D-1/N3: helmet sets security headers (HSTS, CSP `default-src 'self'`,
+  // X-Content-Type-Options, etc.). Default config is fine for a JSON API.
+  app.use(helmet());
+  // 4C-1: use the simple query parser so `?gender[$ne]=null` stays a string
+  // instead of being parsed into an object that reaches Mongoose as a NoSQL
+  // operator. No controller reads nested req.query keys (verified via grep).
+  app.set('query parser', 'simple');
   const server = http.createServer(app);
 
   const ALLOWED_ORIGINS = [
@@ -68,8 +76,12 @@ const startServer = async () => {
 
   app.options('*', cors());
   app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-  app.use(morgan('dev'));
+  // 4C-1: `extended: false` uses the querystring module (no nested-object
+  // parsing), so `?a[$ne]=b` cannot become a Mongoose operator object.
+  app.use(express.urlencoded({ extended: false }));
+  // 4D-2: avoid logging PII query strings (search=, phone=) in production.
+  // `combined` logs the URL path only; `dev` is kept for local development.
+  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
   // Static files (uploads)
   app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

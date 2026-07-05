@@ -4,6 +4,19 @@ const Medicine = require('../models/Medicine');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 
+// PERF-8: parse optional page/limit pagination params. Exports
+// (pdf/excel/csv) always fetch the full matching set, so they ignore
+// these. JSON responses honour `page`/`limit`; when `limit` is absent
+// the endpoint returns everything (preserves the original behaviour
+// for any older caller). Returns `{ paginate, skip, limit, page }`.
+function parsePagination(req) {
+  const page = parseInt(req.query.page, 10);
+  const limit = parseInt(req.query.limit, 10);
+  const paginate = Number.isFinite(limit) && limit > 0;
+  const skip = paginate && Number.isFinite(page) && page > 0 ? (page - 1) * limit : 0;
+  return { paginate, skip, limit, page: paginate ? page || 1 : 1 };
+}
+
 // Generate Appointment Report
 exports.getAppointmentReport = async (req, res, next) => {
   try {
@@ -18,16 +31,29 @@ exports.getAppointmentReport = async (req, res, next) => {
     // Exclude soft-deleted appointments (audit BE-8).
     query.deletedAt = null;
 
-    const appointments = await Appointment.find(query)
+    if (format !== 'json') {
+      // Exports need the full matching dataset, no pagination.
+      const appointments = await Appointment.find(query)
+        .populate('patient', 'name phone')
+        .populate('doctor', 'name')
+        .sort({ date: 1, time: 1 });
+      if (format === 'pdf') return exportAppointmentPDF(res, appointments, startDate, endDate);
+      if (format === 'excel') return exportAppointmentExcel(res, appointments);
+      if (format === 'csv') return exportAppointmentCSV(res, appointments);
+    }
+
+    const { paginate, skip, limit, page } = parsePagination(req);
+    const total = await Appointment.countDocuments(query);
+    let findQuery = Appointment.find(query)
       .populate('patient', 'name phone')
       .populate('doctor', 'name')
       .sort({ date: 1, time: 1 });
+    if (paginate) findQuery = findQuery.skip(skip).limit(limit);
+    const appointments = await findQuery;
 
-    if (format === 'pdf') return exportAppointmentPDF(res, appointments, startDate, endDate);
-    if (format === 'excel') return exportAppointmentExcel(res, appointments);
-    if (format === 'csv') return exportAppointmentCSV(res, appointments);
-
-    res.json({ success: true, data: appointments, total: appointments.length });
+    const response = { success: true, data: appointments, total };
+    if (paginate) response.pagination = { total, page, pages: Math.ceil(total / limit) };
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -41,13 +67,22 @@ exports.getPatientReport = async (req, res, next) => {
     if (gender) query.gender = gender;
     if (bloodGroup) query.bloodGroup = bloodGroup;
 
-    const patients = await Patient.find(query).populate('createdBy', 'name').sort('name');
+    if (format !== 'json') {
+      const patients = await Patient.find(query).populate('createdBy', 'name').sort('name');
+      if (format === 'pdf') return exportPatientPDF(res, patients);
+      if (format === 'excel') return exportPatientExcel(res, patients);
+      if (format === 'csv') return exportPatientCSV(res, patients);
+    }
 
-    if (format === 'pdf') return exportPatientPDF(res, patients);
-    if (format === 'excel') return exportPatientExcel(res, patients);
-    if (format === 'csv') return exportPatientCSV(res, patients);
+    const { paginate, skip, limit, page } = parsePagination(req);
+    const total = await Patient.countDocuments(query);
+    let findQuery = Patient.find(query).populate('createdBy', 'name').sort('name');
+    if (paginate) findQuery = findQuery.skip(skip).limit(limit);
+    const patients = await findQuery;
 
-    res.json({ success: true, data: patients, total: patients.length });
+    const response = { success: true, data: patients, total };
+    if (paginate) response.pagination = { total, page, pages: Math.ceil(total / limit) };
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -63,13 +98,22 @@ exports.getMedicineReport = async (req, res, next) => {
       query.$expr = { $lte: ['$stock', '$lowStockThreshold'] };
     }
 
-    const medicines = await Medicine.find(query).sort('name');
+    if (format !== 'json') {
+      const medicines = await Medicine.find(query).sort('name');
+      if (format === 'pdf') return exportMedicinePDF(res, medicines);
+      if (format === 'excel') return exportMedicineExcel(res, medicines);
+      if (format === 'csv') return exportMedicineCSV(res, medicines);
+    }
 
-    if (format === 'pdf') return exportMedicinePDF(res, medicines);
-    if (format === 'excel') return exportMedicineExcel(res, medicines);
-    if (format === 'csv') return exportMedicineCSV(res, medicines);
+    const { paginate, skip, limit, page } = parsePagination(req);
+    const total = await Medicine.countDocuments(query);
+    let findQuery = Medicine.find(query).sort('name');
+    if (paginate) findQuery = findQuery.skip(skip).limit(limit);
+    const medicines = await findQuery;
 
-    res.json({ success: true, data: medicines, total: medicines.length });
+    const response = { success: true, data: medicines, total };
+    if (paginate) response.pagination = { total, page, pages: Math.ceil(total / limit) };
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -300,13 +344,34 @@ async function exportMedicineExcel(res, medicines) {
 }
 
 // CSV Exports
+// SEC-9: CSV cell sanitizer. Doubles embedded double-quotes (RFC 4180) and
+// prefixes any leading = + - @ with an apostrophe so Excel/Sheets does not
+// interpret the cell as a formula (formula-injection). Returns the quoted
+// cell value.
+function csvCell(value) {
+  let s = value === null || value === undefined ? '' : String(value);
+  if (s.length > 0 && ['=', '+', '-', '@'].includes(s[0])) {
+    s = `'${s}`;
+  }
+  s = s.replace(/"/g, '""');
+  return `"${s}"`;
+}
+
 function exportAppointmentCSV(res, appointments) {
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=appointment_report.csv');
 
   const header = 'Date,Time,Patient,Doctor,Status,Reason,Notes\n';
   const rows = appointments.map(a =>
-    `"${new Date(a.date).toLocaleDateString()}","${a.time}","${a.patient?.name || ''}","${a.doctor?.name || ''}","${a.status}","${a.reason || ''}","${a.notes || ''}"`
+    [
+      csvCell(new Date(a.date).toLocaleDateString()),
+      csvCell(a.time),
+      csvCell(a.patient?.name || ''),
+      csvCell(a.doctor?.name || ''),
+      csvCell(a.status),
+      csvCell(a.reason || ''),
+      csvCell(a.notes || ''),
+    ].join(',')
   ).join('\n');
 
   res.send(header + rows);
@@ -318,7 +383,15 @@ function exportPatientCSV(res, patients) {
 
   const header = 'Name,Age,Gender,Phone,Email,Blood Group,Address\n';
   const rows = patients.map(p =>
-    `"${p.name}","${p.age || ''}","${p.gender || ''}","${p.phone || ''}","${p.email || ''}","${p.bloodGroup || ''}","${p.address || ''}"`
+    [
+      csvCell(p.name),
+      csvCell(p.age || ''),
+      csvCell(p.gender || ''),
+      csvCell(p.phone || ''),
+      csvCell(p.email || ''),
+      csvCell(p.bloodGroup || ''),
+      csvCell(p.address || ''),
+    ].join(',')
   ).join('\n');
 
   res.send(header + rows);
@@ -330,7 +403,16 @@ function exportMedicineCSV(res, medicines) {
 
   const header = 'Name,Generic Name,Stock,Batch,Expiry,Supplier,Price,Category\n';
   const rows = medicines.map(m =>
-    `"${m.name}","${m.genericName || ''}","${m.stock}","${m.batchNumber || ''}","${m.expiryDate ? new Date(m.expiryDate).toLocaleDateString() : ''}","${m.supplier || ''}","${m.price}","${m.category || ''}"`
+    [
+      csvCell(m.name),
+      csvCell(m.genericName || ''),
+      csvCell(m.stock),
+      csvCell(m.batchNumber || ''),
+      csvCell(m.expiryDate ? new Date(m.expiryDate).toLocaleDateString() : ''),
+      csvCell(m.supplier || ''),
+      csvCell(m.price),
+      csvCell(m.category || ''),
+    ].join(',')
   ).join('\n');
 
   res.send(header + rows);

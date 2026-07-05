@@ -115,6 +115,76 @@ describe('patientController clinic scoping', () => {
     expect(Patient.create).not.toHaveBeenCalled();
   });
 
+  it('SEC-7: createPatient strips non-allowlisted fields (clinicId/createdBy/user/dependents/_id)', async () => {
+    const created = { _id: 'pat-id', name: 'Amit' };
+    Patient.create.mockResolvedValue(created);
+
+    const req = {
+      body: {
+        name: 'Amit',
+        age: 35,
+        clinicId: 'attacker-clinic',
+        createdBy: 'attacker',
+        user: 'attacker-user',
+        dependents: [{ name: 'evil' }],
+        _id: 'forged-id',
+        displayId: 'PT_FORGED',
+      },
+      user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
+    };
+    const res = createRes();
+    const next = jest.fn();
+
+    await createPatient(req, res, next);
+
+    expect(Patient.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Amit',
+        age: 35,
+        createdBy: 'doc-id',
+        clinicId: 'clinic-uuid',
+      }),
+    );
+    const payload = Patient.create.mock.calls[0][0];
+    expect(payload.clinicId).toBe('clinic-uuid');
+    expect(payload.createdBy).toBe('doc-id');
+    expect(payload.user).toBeUndefined();
+    expect(payload.dependents).toBeUndefined();
+    expect(payload._id).toBeUndefined();
+    expect(payload.displayId).toBeUndefined();
+  });
+
+  it('SEC-7: updatePatient allow-lists and ignores clinicId/createdBy/_id/medicalNotes', async () => {
+    const updated = { _id: 'pat-id', name: 'Updated' };
+    Patient.findOneAndUpdate.mockResolvedValue(updated);
+
+    const patId = '507f1f77bcf86cd799439011';
+    const req = {
+      params: { id: patId },
+      body: {
+        name: 'Updated',
+        phone: '555-1234',
+        clinicId: 'other',
+        createdBy: 'other',
+        _id: 'forged',
+        medicalNotes: [{ note: 'evil' }],
+        displayId: 'PT_FORGED',
+      },
+      clinicId: 'clinic-uuid',
+      user: { _id: 'doc-id' },
+    };
+    const res = createRes();
+    const next = jest.fn();
+
+    await updatePatient(req, res, next);
+
+    expect(Patient.findOneAndUpdate).toHaveBeenCalledWith(
+      { $or: [{ _id: patId }, { displayId: patId }], clinicId: 'clinic-uuid' },
+      { name: 'Updated', phone: '555-1234' },
+      { new: true, runValidators: true },
+    );
+  });
+
   it('updatePatient strips clinicId/createdBy and scopes by clinic', async () => {
     const updated = { _id: 'pat-id', name: 'Updated' };
     Patient.findOneAndUpdate.mockResolvedValue(updated);

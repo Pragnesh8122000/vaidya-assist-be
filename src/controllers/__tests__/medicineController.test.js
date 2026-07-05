@@ -72,6 +72,38 @@ describe('medicineController clinic scoping', () => {
     expect(Medicine.create).not.toHaveBeenCalled();
   });
 
+  it('SEC-7: createMedicine strips non-allowlisted fields (clinicId/createdBy/_id)', async () => {
+    Medicine.create.mockResolvedValue({ _id: 'med-id', name: 'Para' });
+
+    const req = {
+      body: {
+        name: 'Para',
+        stock: 10,
+        clinicId: 'attacker-clinic',
+        createdBy: 'attacker',
+        _id: 'forged-id',
+      },
+      user: { _id: 'doc-id', clinicId: 'clinic-uuid' },
+    };
+    const res = createRes();
+    const next = jest.fn();
+
+    await createMedicine(req, res, next);
+
+    expect(Medicine.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Para',
+        stock: 10,
+        createdBy: 'doc-id',
+        clinicId: 'clinic-uuid',
+      }),
+    );
+    const payload = Medicine.create.mock.calls[0][0];
+    expect(payload.clinicId).toBe('clinic-uuid');
+    expect(payload.createdBy).toBe('doc-id');
+    expect(payload._id).toBeUndefined();
+  });
+
   it('updateMedicine strips clinicId/createdBy and scopes by clinic', async () => {
     const updated = { _id: 'med-id', name: 'Updated' };
     Medicine.findOneAndUpdate.mockResolvedValue(updated);
