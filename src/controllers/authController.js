@@ -105,13 +105,20 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).select('+password').populate({ path: 'role', populate: { path: 'permissions' } });
+    const user = await User.findOne({ email }).select('+password +authProvider').populate({ path: 'role', populate: { path: 'permissions' } });
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
     if (!user.isActive) {
       return res.status(401).json({ success: false, message: 'Account is deactivated.' });
+    }
+
+    // Google-only accounts have no password. Give a clear message rather
+    // than a generic "invalid credentials" that might prompt repeated
+    // password attempts.
+    if (user.authProvider === 'google' && !user.password) {
+      return res.status(401).json({ success: false, message: 'This account uses Google Sign-In. Please sign in with Google.' });
     }
 
     const isMatch = await user.comparePassword(password);
